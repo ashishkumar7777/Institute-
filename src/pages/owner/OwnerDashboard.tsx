@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useNotice } from '../../context/NoticeContext';
 import { NoticeBanner } from '../../components/common/NoticeBanner';
-import { mockUsers, currentInstitute, type User } from '../../services/mockData';
+import { supabase } from '../../services/supabase';
+import { mockUsers, currentInstitute } from '../../services/mockData';
 import {
   DollarSign,
   Users,
@@ -18,10 +19,23 @@ import {
   Building2,
   TrendingUp,
   Home,
-  Settings
+  Settings,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 
 type OwnerModal = 'fees' | 'teachers' | 'students' | 'notices' | 'branding' | null;
+
+interface StudentProfile {
+  id: string;
+  name: string;
+  phone: string;
+  role: string;
+  institute_id?: string;
+  enrolled_subjects?: string[];
+  fee_status?: 'PAID' | 'UNPAID';
+  attendance_rate?: number;
+}
 
 export const OwnerDashboard: React.FC = () => {
   const { currentUser, logout } = useAuth();
@@ -29,10 +43,13 @@ export const OwnerDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [activeModal, setActiveModal] = useState<OwnerModal>(null);
 
-  // Local state for interactive demos
-  const [students, setStudents] = useState<User[]>(
-    mockUsers.filter((u) => u.role === 'student')
-  );
+  // Live Supabase student roster state
+  const [students, setStudents] = useState<StudentProfile[]>([]);
+  const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(true);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+
+  // Faculty fallback
   const teachers = mockUsers.filter((u) => u.role === 'teacher');
 
   const [instituteName, setInstituteName] = useState(currentInstitute.name);
@@ -40,47 +57,97 @@ export const OwnerDashboard: React.FC = () => {
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [noticePriority, setNoticePriority] = useState<'normal' | 'urgent'>('normal');
 
+  // New Student Admission Form Fields
   const [newStudentName, setNewStudentName] = useState('');
   const [newStudentPhone, setNewStudentPhone] = useState('');
-  const [selectedTeacherId, setSelectedTeacherId] = useState('tech_math');
+  const [newStudentPin, setNewStudentPin] = useState('123456');
+  const [selectedSubject, setSelectedSubject] = useState('Mathematics');
 
-  // Financial calculations
-  const feePerStudent = 12000;
-  const paidStudentsCount = students.filter((s) => s.feeStatus === 'PAID').length;
-  const unpaidStudentsCount = students.filter((s) => s.feeStatus === 'UNPAID').length;
-  const totalCollected = paidStudentsCount * feePerStudent;
-  const totalExpected = students.length * feePerStudent;
-  const collectionPercentage = Math.round((totalCollected / totalExpected) * 100);
+  // Load students from Supabase profiles
+  const loadStudents = async () => {
+    setIsLoadingStudents(true);
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'student')
+        .order('name', { ascending: true });
 
-  // Toggle paid / unpaid offline cash collection
-  const toggleFeeStatus = (studentId: string) => {
-    setStudents((prev) =>
-      prev.map((s) =>
-        s.id === studentId
-          ? { ...s, feeStatus: s.feeStatus === 'PAID' ? 'UNPAID' : 'PAID' }
-          : s
-      )
-    );
+      if (error) throw error;
+      setStudents((data as StudentProfile[]) || []);
+    } catch (err: any) {
+      console.error('Failed to load students:', err.message);
+    } finally {
+      setIsLoadingStudents(false);
+    }
   };
 
-  const handleAddStudent = (e: React.FormEvent) => {
+  useEffect(() => {
+    loadStudents();
+  }, []);
+
+  // Financial calculations derived from live PostgreSQL profiles
+  const feePerStudent = 12000;
+  const paidStudentsCount = students.filter((s) => s.fee_status === 'PAID').length;
+  const unpaidStudentsCount = students.filter((s) => s.fee_status === 'UNPAID').length;
+  const totalCollected = paidStudentsCount * feePerStudent;
+  const totalExpected = (students.length || 1) * feePerStudent;
+  const collectionPercentage = students.length > 0 ? Math.round((totalCollected / totalExpected) * 100) : 0;
+
+  // Toggle fee status directly in Supabase
+  const toggleFeeStatus = async (studentId: string, currentStatus?: 'PAID' | 'UNPAID') => {
+    const nextStatus = currentStatus === 'PAID' ? 'UNPAID' : 'PAID';
+
+    setStudents((prev) =>
+      prev.map((s) => (s.id === studentId ? { ...s, fee_status: nextStatus } : s))
+    );
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ fee_status: nextStatus })
+      .eq('id', studentId);
+
+    if (error) {
+      console.error('Fee update failed:', error.message);
+      loadStudents();
+    }
+  };
+
+  // Live Student Onboarding via Supabase RPC
+  const handleAddStudent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newStudentName.trim()) return;
+    if (!newStudentName.trim() || !newStudentPhone.trim() || !newStudentPin.trim()) {
+      setErrorMessage('Please fill in Name, Phone, and Secret PIN.');
+      return;
+    }
 
-    const newStudent: User = {
-      id: `std_${Date.now()}`,
-      name: newStudentName,
-      role: 'student',
-      phone: newStudentPhone || '9900099999',
-      assignedTeacherId: selectedTeacherId,
-      feeStatus: 'UNPAID',
-      attendanceRate: 100,
-    };
+    setIsSubmitting(true);
+    setErrorMessage('');
 
-    setStudents([newStudent, ...students]);
-    setNewStudentName('');
-    setNewStudentPhone('');
-    alert(`Enrolled ${newStudent.name} successfully!`);
+    try {
+      const instituteId = currentUser?.institute_id || 'inst_apex_01';
+
+      const { error } = await supabase.rpc('onboard_student', {
+        p_name: newStudentName.trim(),
+        p_phone: newStudentPhone.trim(),
+        p_pin: newStudentPin.trim(),
+        p_institute_id: instituteId,
+        p_enrolled_subjects: [selectedSubject],
+        p_fee_status: 'PAID'
+      });
+
+      if (error) throw error;
+
+      await loadStudents();
+      setNewStudentName('');
+      setNewStudentPhone('');
+      setNewStudentPin('123456');
+      alert(`Student enrolled successfully with Mobile: ${newStudentPhone.trim()} and PIN: ${newStudentPin.trim()}`);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to onboard student');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const quickCards = [
@@ -133,10 +200,9 @@ export const OwnerDashboard: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex justify-center pb-20 select-none">
-      {/* Mobile-Frame Container */}
       <div className="w-full max-w-md bg-white min-h-screen shadow-xl flex flex-col relative overflow-hidden">
         
-        {/* Top Gradient Curved Header */}
+        {/* Top Header */}
         <div className="bg-gradient-to-r from-purple-800 via-indigo-700 to-slate-900 px-6 pt-7 pb-10 rounded-b-[2.5rem] shadow-md text-white">
           <div className="flex items-center justify-between mb-3">
             <div>
@@ -153,11 +219,11 @@ export const OwnerDashboard: React.FC = () => {
 
             <div className="flex items-center gap-3">
               <button
-                onClick={() => {
-                  logout();
+                onClick={async () => {
+                  await logout();
                   navigate('/login');
                 }}
-                title="Switch Account"
+                title="Sign Out"
                 className="w-9 h-9 rounded-full bg-white/15 backdrop-blur flex items-center justify-center text-white hover:bg-white/25 transition"
               >
                 <LogOut className="w-4 h-4" />
@@ -168,7 +234,7 @@ export const OwnerDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Real-Time Revenue Collection Snapshot */}
+          {/* Revenue Snapshot */}
           <div className="mt-3 p-3.5 bg-white/10 backdrop-blur rounded-2xl border border-white/15">
             <div className="flex items-center justify-between text-xs mb-1.5">
               <span className="text-purple-200 font-semibold flex items-center gap-1">
@@ -178,7 +244,7 @@ export const OwnerDashboard: React.FC = () => {
                 ₹{totalCollected.toLocaleString()} / ₹{totalExpected.toLocaleString()}
               </span>
             </div>
-            {/* Progress Bar */}
+            
             <div className="w-full bg-black/30 rounded-full h-2 overflow-hidden mb-2">
               <div
                 className="bg-gradient-to-r from-emerald-400 to-teal-300 h-full rounded-full transition-all duration-500"
@@ -192,10 +258,10 @@ export const OwnerDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Real-Time Live Institute Broadcast Strip */}
+        {/* Real-time Notice Banner */}
         <NoticeBanner />
 
-        {/* Quick Tools Grid */}
+        {/* Quick Tools */}
         <div className="px-5 py-5 flex-1 overflow-y-auto">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-base font-bold text-slate-800 tracking-tight">Executive Control</h2>
@@ -226,19 +292,19 @@ export const OwnerDashboard: React.FC = () => {
             })}
           </div>
 
-          {/* Quick Operations Pulse Banner */}
+          {/* Infrastructure Status */}
           <div className="mt-5 p-4 rounded-2xl bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-100 flex items-start justify-between">
             <div>
               <p className="text-xs font-bold text-purple-900">Subscription & Storage</p>
               <p className="text-[11px] text-purple-700 mt-0.5">
-                Cloudflare R2 Storage: 1.1 GB / 10 GB (₹0 Free Tier)
+                Cloudflare R2: 1.1 GB / 10 GB (₹0 Free Tier)
               </p>
               <p className="text-[10px] text-purple-500 mt-1">
-                White-Label License: Active • AMC ₹4,000/yr
+                Multi-Tenant PostgreSQL • RLS Enabled
               </p>
             </div>
             <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-full">
-              Healthy
+              Live
             </span>
           </div>
         </div>
@@ -298,7 +364,7 @@ export const OwnerDashboard: React.FC = () => {
                   <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl text-xs">
                     <div>
                       <p className="font-bold text-slate-700">{unpaidStudentsCount} Overdue Payments</p>
-                      <p className="text-[10px] text-slate-400">Tap status badge to mark cash payment</p>
+                      <p className="text-[10px] text-slate-400">Tap status badge to toggle live status</p>
                     </div>
                     <button
                       onClick={() => alert(`WhatsApp payment links broadcasted to ${unpaidStudentsCount} parents!`)}
@@ -319,14 +385,14 @@ export const OwnerDashboard: React.FC = () => {
                           <p className="text-[10px] text-slate-400">Phone: {s.phone}</p>
                         </div>
                         <button
-                          onClick={() => toggleFeeStatus(s.id)}
+                          onClick={() => toggleFeeStatus(s.id, s.fee_status)}
                           className={`px-2.5 py-1 rounded-lg font-bold text-[10px] transition ${
-                            s.feeStatus === 'PAID'
+                            s.fee_status === 'PAID'
                               ? 'bg-emerald-100 text-emerald-700 hover:bg-rose-100 hover:text-rose-700'
                               : 'bg-rose-100 text-rose-700 hover:bg-emerald-100 hover:text-emerald-700'
                           }`}
                         >
-                          {s.feeStatus}
+                          {s.fee_status || 'PAID'}
                         </button>
                       </div>
                     ))}
@@ -362,53 +428,98 @@ export const OwnerDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 3. STUDENT ADMISSIONS */}
+              {/* 3. LIVE STUDENT ADMISSIONS */}
               {activeModal === 'students' && (
                 <div className="space-y-4 text-xs">
-                  <form onSubmit={handleAddStudent} className="p-3 bg-slate-50 rounded-2xl space-y-2 border border-slate-200">
-                    <p className="font-bold text-slate-800">Quick Enroll Student</p>
+                  <form onSubmit={handleAddStudent} className="p-3.5 bg-slate-50 rounded-2xl space-y-2.5 border border-slate-200">
+                    <p className="font-bold text-slate-800 text-sm">Admit New Student</p>
+
+                    {errorMessage && (
+                      <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 text-[11px] flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{errorMessage}</span>
+                      </div>
+                    )}
+
                     <input
                       type="text"
                       placeholder="Student Full Name"
                       value={newStudentName}
                       onChange={(e) => setNewStudentName(e.target.value)}
-                      className="w-full p-2 rounded-xl border border-slate-200 bg-white"
+                      className="w-full p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-blue-500 font-medium"
                       required
                     />
+
                     <div className="grid grid-cols-2 gap-2">
                       <input
-                        type="text"
-                        placeholder="Parent Phone"
+                        type="tel"
+                        placeholder="Mobile Number"
                         value={newStudentPhone}
                         onChange={(e) => setNewStudentPhone(e.target.value)}
-                        className="p-2 rounded-xl border border-slate-200 bg-white"
+                        className="p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-blue-500"
+                        required
                       />
-                      <select
-                        value={selectedTeacherId}
-                        onChange={(e) => setSelectedTeacherId(e.target.value)}
-                        className="p-2 rounded-xl border border-slate-200 bg-white"
-                      >
-                        <option value="tech_math">Maths Batch</option>
-                        <option value="tech_phy">Physics Batch</option>
-                        <option value="tech_chem">Chemistry Batch</option>
-                      </select>
+                      <input
+                        type="text"
+                        placeholder="Login PIN"
+                        value={newStudentPin}
+                        onChange={(e) => setNewStudentPin(e.target.value)}
+                        className="p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-blue-500"
+                        required
+                      />
                     </div>
+
+                    <select
+                      value={selectedSubject}
+                      onChange={(e) => setSelectedSubject(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-slate-200 bg-white focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="Mathematics">Mathematics Stream</option>
+                      <option value="Physics">Physics Stream</option>
+                      <option value="Chemistry">Chemistry Stream</option>
+                    </select>
+
                     <button
                       type="submit"
-                      className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center justify-center gap-1 shadow-sm"
+                      disabled={isSubmitting}
+                      className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white rounded-xl font-bold flex items-center justify-center gap-1.5 shadow-md shadow-blue-500/20 disabled:opacity-50"
                     >
-                      <Plus className="w-3.5 h-3.5" /> Enroll Student
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Creating Database Record...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Admit to Institute</span>
+                        </>
+                      )}
                     </button>
                   </form>
 
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                    <p className="font-bold text-slate-600">Current Admissions ({students.length})</p>
-                    {students.map((s) => (
-                      <div key={s.id} className="p-2 bg-slate-50 rounded-lg flex justify-between items-center text-[11px]">
-                        <span>{s.name}</span>
-                        <span className="text-slate-400">{s.phone}</span>
-                      </div>
-                    ))}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-bold text-slate-700">Enrolled Students ({students.length})</p>
+                      {isLoadingStudents && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+                    </div>
+
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      {students.map((s) => (
+                        <div key={s.id} className="p-2.5 bg-slate-50 rounded-xl flex justify-between items-center text-[11px] border border-slate-100">
+                          <div>
+                            <span className="font-bold text-slate-800 block">{s.name}</span>
+                            <span className="text-slate-400 text-[10px]">
+                              {s.enrolled_subjects?.join(', ') || 'General'}
+                            </span>
+                          </div>
+                          <span className="text-slate-500 font-mono text-[10px]">{s.phone}</span>
+                        </div>
+                      ))}
+                      {students.length === 0 && !isLoadingStudents && (
+                        <p className="text-center text-slate-400 py-3 text-[11px]">No students admitted yet.</p>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -499,9 +610,8 @@ export const OwnerDashboard: React.FC = () => {
                     </div>
                   </div>
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-slate-600 space-y-1">
-                    <p>• PWA Manifest: <strong>Installed</strong></p>
-                    <p>• Multi-Tenant Domain: <strong>apex.institute.local</strong></p>
-                    <p>• Cloudflare Zero-Egress Storage: <strong>Active</strong></p>
+                    <p>• Multi-Tenant Schema: <strong>Isolated RLS</strong></p>
+                    <p>• Zero Egress Storage: <strong>Cloudflare R2 Ready</strong></p>
                   </div>
                   <button
                     onClick={() => {

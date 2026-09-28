@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useLibrary } from '../../context/LibraryContext';
 import { NoticeBanner } from '../../components/common/NoticeBanner';
-import { type SubjectType, type Chapter } from '../../services/mockData';
 import { PdfReaderModal } from '../../components/reader/PdfReaderModal';
 import {
   User as UserIcon,
@@ -32,23 +31,31 @@ export const StudentDashboard: React.FC = () => {
   const navigate = useNavigate();
 
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
-  const [activeReadingChapter, setActiveReadingChapter] = useState<Chapter | null>(null);
+  const [activeReadingChapter, setActiveReadingChapter] = useState<any | null>(null);
 
-  // Enrolled subjects isolation (only enrolled subjects show up)
-  const enrolledSubjects: SubjectType[] = currentUser?.enrolledSubjects && currentUser.enrolledSubjects.length > 0
-    ? currentUser.enrolledSubjects
-    : ['Mathematics'];
+  // Read enrolled subjects from live Supabase profile or fallback
+  const enrolledSubjects: string[] = 
+    (currentUser as any)?.enrolled_subjects?.length > 0
+      ? (currentUser as any).enrolled_subjects
+      : (currentUser as any)?.enrolledSubjects?.length > 0
+      ? (currentUser as any).enrolledSubjects
+      : ['Mathematics'];
 
-  const [selectedSubject, setSelectedSubject] = useState<SubjectType>(enrolledSubjects[0]);
+  const [selectedSubject, setSelectedSubject] = useState<string>(enrolledSubjects[0]);
 
   const studentName = currentUser?.name || 'Aarav Patel';
   const studentPhone = currentUser?.phone || '9900011101';
-  const isPaid = currentUser?.feeStatus === 'PAID';
-  const attendanceRate = currentUser?.attendanceRate ?? 88;
+  
+  // Reconcile live Supabase fee_status ('PAID' / 'UNPAID')
+  const liveFeeStatus = (currentUser as any)?.fee_status || (currentUser as any)?.feeStatus || 'UNPAID';
+  const isPaid = liveFeeStatus === 'PAID';
+  const attendanceRate = (currentUser as any)?.attendance_rate ?? (currentUser as any)?.attendanceRate ?? 100;
 
-  // Filter chapters strictly by selected enrolled subject
-  const visibleChapters = chapters.filter((c) => c.subject === selectedSubject);
-  const unlockedChaptersCount = visibleChapters.filter((c) => c.isUnlocked).length;
+  // Filter live chapters by selected subject
+  const visibleChapters = chapters.filter((c: any) => c.subject === selectedSubject);
+  
+  // When fees are cleared, enrolled chapters are unlocked for reading
+  const unlockedChaptersCount = isPaid ? visibleChapters.length : visibleChapters.filter((c: any) => c.isUnlocked).length;
 
   const assignments = [
     { id: 1, title: 'Calculus Problem Set 4', subject: 'Mathematics', dueDate: 'Tomorrow, 5:00 PM', status: 'Pending' },
@@ -141,8 +148,8 @@ export const StudentDashboard: React.FC = () => {
 
             <div className="flex items-center gap-3">
               <button 
-                onClick={() => {
-                  logout();
+                onClick={async () => {
+                  await logout();
                   navigate('/login');
                 }} 
                 title="Switch Account" 
@@ -161,10 +168,10 @@ export const StudentDashboard: React.FC = () => {
               <span className="text-blue-200 text-[10px] font-bold uppercase">Enrolled Subject(s)</span>
               <p className="font-semibold text-white">{enrolledSubjects.join(' • ')}</p>
             </div>
-            <span className={`text-[10px] px-2 py-1 rounded font-bold ${
+            <span className={`text-[10px] px-2.5 py-1 rounded font-bold ${
               isPaid ? 'bg-emerald-500/30 text-emerald-200' : 'bg-rose-500/30 text-rose-200'
             }`}>
-              {isPaid ? 'FEE PAID' : 'FEE DUE'}
+              {isPaid ? 'FEES CLEARED' : 'FEE DUE'}
             </span>
           </div>
         </div>
@@ -245,7 +252,7 @@ export const StudentDashboard: React.FC = () => {
                 </button>
               </div>
 
-              {/* 1. E-LIBRARY */}
+              {/* 1. E-LIBRARY (LIVE SUPABASE CHAPTERS) */}
               {activeModal === 'library' && (
                 <div className="space-y-4 text-xs">
                   {/* Subject Tabs */}
@@ -265,40 +272,55 @@ export const StudentDashboard: React.FC = () => {
                     ))}
                   </div>
 
-                  {/* 20 Chapters List */}
+                  {/* Chapters List */}
                   <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                    {visibleChapters.map((chap) => (
-                      <div
-                        key={chap.id}
-                        className={`p-3 rounded-xl border flex items-center justify-between transition ${
-                          chap.isUnlocked
-                            ? 'bg-blue-50/50 border-blue-100 text-slate-800'
-                            : 'bg-slate-50 border-slate-100 text-slate-400 opacity-70'
-                        }`}
-                      >
-                        <div className="pr-2">
-                          <span className="font-bold text-xs">
-                            Ch {chap.chapterNumber}: {chap.title}
-                          </span>
-                          <span className="block text-[10px] mt-0.5">
-                            {chap.totalPages} Pages • {chap.isUnlocked ? 'Unlocked by Faculty' : 'Locked (Taught in class)'}
-                          </span>
-                        </div>
+                    {visibleChapters.map((chap: any) => {
+                      const chapterNum = chap.chapter_number ?? chap.chapterNumber ?? 1;
+                      const pages = chap.total_pages ?? chap.totalPages ?? 14;
+                      const canRead = isPaid || chap.isUnlocked;
 
-                        {chap.isUnlocked ? (
-                          <button
-                            onClick={() => setActiveReadingChapter(chap)}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm shrink-0"
-                          >
-                            <Eye className="w-3 h-3" /> Read
-                          </button>
-                        ) : (
-                          <div className="flex items-center gap-1 text-slate-400 px-2 py-1 bg-slate-200 rounded-md text-[10px] font-semibold shrink-0">
-                            <Lock className="w-3 h-3" /> Locked
+                      return (
+                        <div
+                          key={chap.id}
+                          className={`p-3 rounded-xl border flex items-center justify-between transition ${
+                            canRead
+                              ? 'bg-blue-50/50 border-blue-100 text-slate-800'
+                              : 'bg-slate-50 border-slate-100 text-slate-400 opacity-70'
+                          }`}
+                        >
+                          <div className="pr-2">
+                            <span className="font-bold text-xs">
+                              Ch {chapterNum}: {chap.title}
+                            </span>
+                            <span className="block text-[10px] mt-0.5 text-slate-500">
+                              {pages} Pages • {canRead ? 'Ready for study' : 'Locked (Payment pending)'}
+                            </span>
                           </div>
-                        )}
-                      </div>
-                    ))}
+
+                          {canRead ? (
+                            <button
+                              onClick={() => setActiveReadingChapter({
+                                ...chap,
+                                chapterNumber: chapterNum,
+                                totalPages: pages,
+                                pdfUrl: chap.pdf_url || chap.pdfUrl,
+                              })}
+                              className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-sm shrink-0"
+                            >
+                              <Eye className="w-3 h-3" /> Read
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1 text-slate-400 px-2 py-1 bg-slate-200 rounded-md text-[10px] font-semibold shrink-0">
+                              <Lock className="w-3 h-3" /> Locked
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {visibleChapters.length === 0 && (
+                      <p className="text-center text-slate-400 py-6 text-xs">No chapters published for this stream yet.</p>
+                    )}
                   </div>
                 </div>
               )}
@@ -312,7 +334,7 @@ export const StudentDashboard: React.FC = () => {
                     </div>
                     <div>
                       <p className="font-bold text-slate-800">{studentName}</p>
-                      <p className="text-xs text-slate-500">Phone: {currentUser?.phone}</p>
+                      <p className="text-xs text-slate-500">Phone: {studentPhone}</p>
                     </div>
                   </div>
                   <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1">

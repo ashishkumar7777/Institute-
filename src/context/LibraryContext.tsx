@@ -1,29 +1,73 @@
-import React, { createContext, useContext, useState, type ReactNode } from 'react';
-import { mockChapters, type Chapter, type SubjectType } from '../services/mockData';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase } from '../services/supabase';
+import { useAuth } from './AuthContext';
+
+export interface Chapter {
+  id: string;
+  institute_id: string;
+  subject: string;
+  chapter_number: number;
+  title: string;
+  description: string;
+  pdf_url: string;
+  total_pages: number;
+}
 
 interface LibraryContextType {
   chapters: Chapter[];
-  toggleChapterLock: (chapterId: string) => void;
-  getChaptersBySubject: (subject: SubjectType) => Chapter[];
+  isLoading: boolean;
+  selectedChapter: Chapter | null;
+  setSelectedChapter: (chapter: Chapter | null) => void;
+  refreshChapters: () => Promise<void>;
 }
 
 const LibraryContext = createContext<LibraryContextType | undefined>(undefined);
 
-export const LibraryProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [chapters, setChapters] = useState<Chapter[]>(mockChapters);
+export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { currentUser } = useAuth();
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  const toggleChapterLock = (chapterId: string) => {
-    setChapters((prev) =>
-      prev.map((c) => (c.id === chapterId ? { ...c, isUnlocked: !c.isUnlocked } : c))
-    );
+  const fetchChapters = async () => {
+    setIsLoading(true);
+    try {
+      let query = supabase
+        .from('chapters')
+        .select('*')
+        .order('chapter_number', { ascending: true });
+
+      // Automatically filter by student enrolled stream if defined
+      if (currentUser?.enrolled_subjects && currentUser.enrolled_subjects.length > 0) {
+        query = query.in('subject', currentUser.enrolled_subjects);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      setChapters((data as Chapter[]) || []);
+    } catch (err: any) {
+      console.error('Error fetching chapters:', err.message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const getChaptersBySubject = (subject: SubjectType) => {
-    return chapters.filter((c) => c.subject === subject);
-  };
+  useEffect(() => {
+    if (currentUser) {
+      fetchChapters();
+    }
+  }, [currentUser]);
 
   return (
-    <LibraryContext.Provider value={{ chapters, toggleChapterLock, getChaptersBySubject }}>
+    <LibraryContext.Provider
+      value={{
+        chapters,
+        isLoading,
+        selectedChapter,
+        setSelectedChapter,
+        refreshChapters: fetchChapters,
+      }}
+    >
       {children}
     </LibraryContext.Provider>
   );
