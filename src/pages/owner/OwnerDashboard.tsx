@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useNotice } from '../../context/NoticeContext';
 import { NoticeBanner } from '../../components/common/NoticeBanner';
 import { supabase } from '../../services/supabase';
-import { mockUsers, currentInstitute } from '../../services/mockData';
+import { currentInstitute } from '../../services/mockData';
 import {
   DollarSign,
   Users,
@@ -21,7 +21,8 @@ import {
   Home,
   Settings,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  UserPlus
 } from 'lucide-react';
 
 type OwnerModal = 'fees' | 'teachers' | 'students' | 'notices' | 'branding' | null;
@@ -37,6 +38,15 @@ interface StudentProfile {
   attendance_rate?: number;
 }
 
+interface TeacherProfile {
+  id: string;
+  name: string;
+  phone: string;
+  role: string;
+  enrolled_subjects?: string[];
+  subject?: string;
+}
+
 export const OwnerDashboard: React.FC = () => {
   const { currentUser, logout } = useAuth();
   const { addNotice } = useNotice();
@@ -49,8 +59,15 @@ export const OwnerDashboard: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
 
-  // Faculty fallback
-  const teachers = mockUsers.filter((u) => u.role === 'teacher');
+  // Live Supabase teachers state
+  const [teachers, setTeachers] = useState<TeacherProfile[]>([]);
+  const [isLoadingTeachers, setIsLoadingTeachers] = useState<boolean>(true);
+  const [showAddTeacherModal, setShowAddTeacherModal] = useState<boolean>(false);
+  const [newTeacherName, setNewTeacherName] = useState<string>('');
+  const [newTeacherPhone, setNewTeacherPhone] = useState<string>('');
+  const [newTeacherSubject, setNewTeacherSubject] = useState<string>('Physics');
+  const [newTeacherPin, setNewTeacherPin] = useState<string>('123456');
+  const [isSubmittingTeacher, setIsSubmittingTeacher] = useState<boolean>(false);
 
   const [instituteName, setInstituteName] = useState(currentInstitute.name);
   const [noticeTitle, setNoticeTitle] = useState('');
@@ -82,8 +99,28 @@ export const OwnerDashboard: React.FC = () => {
     }
   };
 
+  // Load teachers from Supabase profiles
+  const loadTeachers = async () => {
+    setIsLoadingTeachers(true);
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'teacher')
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      setTeachers((data as TeacherProfile[]) || []);
+    } catch (err: any) {
+      console.error('Failed to load teachers:', err.message);
+    } finally {
+      setIsLoadingTeachers(false);
+    }
+  };
+
   useEffect(() => {
     loadStudents();
+    loadTeachers();
   }, []);
 
   // Financial calculations derived from live PostgreSQL profiles
@@ -147,6 +184,39 @@ export const OwnerDashboard: React.FC = () => {
       setErrorMessage(err.message || 'Failed to onboard student');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // Live Faculty Onboarding via Supabase RPC
+  const handleAddTeacher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTeacherName.trim() || !newTeacherPhone.trim() || !newTeacherPin.trim()) {
+      alert('Please fill in Name, Phone, and PIN.');
+      return;
+    }
+
+    setIsSubmittingTeacher(true);
+    try {
+      const { error } = await supabase.rpc('onboard_new_teacher', {
+        p_name: newTeacherName.trim(),
+        p_phone: newTeacherPhone.trim(),
+        p_pin: newTeacherPin.trim(),
+        p_subject: newTeacherSubject.trim(),
+      });
+
+      if (error) throw error;
+
+      alert(`Teacher ${newTeacherName} onboarded successfully! They can log in with PIN: ${newTeacherPin}`);
+      setNewTeacherName('');
+      setNewTeacherPhone('');
+      setNewTeacherPin('123456');
+      setShowAddTeacherModal(false);
+      await loadTeachers();
+    } catch (err: any) {
+      console.error('Failed to onboard teacher:', err.message);
+      alert('Error onboarding teacher: ' + err.message);
+    } finally {
+      setIsSubmittingTeacher(false);
     }
   };
 
@@ -400,31 +470,61 @@ export const OwnerDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 2. FACULTY DIRECTORY */}
+              {/* 2. LIVE FACULTY DIRECTORY & ADD BUTTON */}
               {activeModal === 'teachers' && (
                 <div className="space-y-3 text-xs">
-                  {teachers.map((t) => (
-                    <div
-                      key={t.id}
-                      className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center">
-                          {t.name.charAt(0)}
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-800">{t.name}</p>
-                          <p className="text-[10px] text-indigo-600 font-medium">{t.subject} Faculty</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded">
-                          Att: Logged
-                        </span>
-                        <p className="text-[9px] text-slate-400 mt-0.5">Hall 2 • 4:30 PM</p>
-                      </div>
+                  <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <div>
+                      <p className="font-bold text-slate-700">{teachers.length} Faculty Members</p>
+                      <p className="text-[10px] text-slate-400">Live PostgreSQL directory</p>
                     </div>
-                  ))}
+                    <button
+                      onClick={() => setShowAddTeacherModal(true)}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shadow-sm"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Teacher
+                    </button>
+                  </div>
+
+                  {isLoadingTeachers ? (
+                    <div className="flex justify-center py-6 text-slate-400">
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    </div>
+                  ) : teachers.length === 0 ? (
+                    <p className="text-center text-slate-400 py-6">No faculty found. Click &quot;Add Teacher&quot; above.</p>
+                  ) : (
+                    <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                      {teachers.map((t) => {
+                        const subjectDisplay =
+                          Array.isArray(t.enrolled_subjects) && t.enrolled_subjects.length > 0
+                            ? t.enrolled_subjects.join(', ')
+                            : t.subject || 'Specialist';
+
+                        return (
+                          <div
+                            key={t.id}
+                            className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between"
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center">
+                                {t.name.charAt(0)}
+                              </div>
+                              <div>
+                                <p className="font-bold text-slate-800">{t.name}</p>
+                                <p className="text-[10px] text-indigo-600 font-medium">{subjectDisplay} Faculty</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded">
+                                Active
+                              </span>
+                              <p className="text-[9px] text-slate-400 font-mono mt-0.5">{t.phone}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -625,6 +725,87 @@ export const OwnerDashboard: React.FC = () => {
                 </div>
               )}
 
+            </div>
+          </div>
+        )}
+
+        {/* Sub-Modal: Add New Teacher Form */}
+        {showAddTeacherModal && (
+          <div className="absolute inset-0 bg-black/60 z-40 flex items-center justify-center p-4 backdrop-blur-xs">
+            <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-2xl border border-slate-100">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+                <div className="flex items-center gap-2">
+                  <UserPlus className="w-5 h-5 text-emerald-600" />
+                  <h4 className="font-bold text-slate-800 text-sm">Onboard New Faculty</h4>
+                </div>
+                <button
+                  onClick={() => setShowAddTeacherModal(false)}
+                  className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 hover:bg-slate-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddTeacher} className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-slate-600 font-bold mb-1">Teacher Full Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Dr. H.C. Verma"
+                    value={newTeacherName}
+                    onChange={(e) => setNewTeacherName(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-emerald-500 font-medium"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-bold mb-1">Mobile Number (Login ID)</label>
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    placeholder="e.g. 9871780002"
+                    value={newTeacherPhone}
+                    onChange={(e) => setNewTeacherPhone(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-emerald-500 font-medium"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-bold mb-1">Teaching Subject</label>
+                  <select
+                    value={newTeacherSubject}
+                    onChange={(e) => setNewTeacherSubject(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-emerald-500 font-medium bg-white"
+                  >
+                    <option value="Physics">Physics</option>
+                    <option value="Chemistry">Chemistry</option>
+                    <option value="Mathematics">Mathematics</option>
+                    <option value="Biology">Biology</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 font-bold mb-1">Access PIN / Password</label>
+                  <input
+                    type="text"
+                    value={newTeacherPin}
+                    onChange={(e) => setNewTeacherPin(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-emerald-500 font-medium"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmittingTeacher}
+                  className="w-full py-3 mt-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white rounded-xl font-bold shadow-md flex items-center justify-center gap-1.5 transition"
+                >
+                  {isSubmittingTeacher && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Confirm & Create Faculty Account
+                </button>
+              </form>
             </div>
           </div>
         )}

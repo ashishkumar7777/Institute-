@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLibrary } from '../../context/LibraryContext';
 import { NoticeBanner } from '../../components/common/NoticeBanner';
 import { PdfReaderModal } from '../../components/reader/PdfReaderModal';
+import { AttendanceCalendar } from './AttendanceCalendar';
 import {
   User as UserIcon,
   CalendarCheck,
@@ -213,7 +214,10 @@ export const StudentDashboard: React.FC = () => {
 
         {/* Bottom Navigation */}
         <div className="border-t border-slate-100 bg-white/95 backdrop-blur px-6 py-2.5 flex items-center justify-between fixed bottom-0 max-w-md w-full z-10 shadow-lg">
-          <button className="flex flex-col items-center gap-1 text-blue-600 font-medium">
+          <button 
+            onClick={() => setActiveModal(null)}
+            className="flex flex-col items-center gap-1 text-blue-600 font-medium"
+          >
             <Home className="w-5 h-5" />
             <span className="text-[10px]">Home</span>
           </button>
@@ -240,7 +244,7 @@ export const StudentDashboard: React.FC = () => {
                   {activeModal === 'library' && 'Syllabus & E-Reader Library'}
                   {activeModal === 'fees' && 'Fees Status & History'}
                   {activeModal === 'profile' && 'Student Profile'}
-                  {activeModal === 'attendance' && 'Monthly Attendance'}
+                  {activeModal === 'attendance' && 'Daily Attendance Calendar'}
                   {activeModal === 'assignment' && 'Assigned Homework'}
                   {activeModal === 'results' && 'Academic Performance'}
                 </h3>
@@ -344,7 +348,7 @@ export const StudentDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 3. ATTENDANCE */}
+              {/* 3. ATTENDANCE & DATE-WISE CALENDAR */}
               {activeModal === 'attendance' && (
                 <div className="space-y-4">
                   <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-between">
@@ -354,6 +358,9 @@ export const StudentDashboard: React.FC = () => {
                     </div>
                     <CheckCircle2 className="w-10 h-10 text-emerald-500" />
                   </div>
+
+                  {/* Date-wise Present (P) / Absent (A) Calendar */}
+                  <AttendanceCalendar />
                 </div>
               )}
 
