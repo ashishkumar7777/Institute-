@@ -23,7 +23,9 @@ import {
   Lock,
   Eye,
   FileText,
-  Loader2
+  Loader2,
+  Trophy,
+  Medal
 } from 'lucide-react';
 
 type ActiveModal = 'profile' | 'attendance' | 'assignment' | 'fees' | 'results' | 'library' | null;
@@ -36,6 +38,56 @@ interface MaterialItem {
   pdf_url: string;
   is_unlocked?: boolean;
 }
+
+interface TestResultItem {
+  id: string;
+  test_name: string;
+  subject: string;
+  total_marks: number;
+  marks_obtained: number;
+  grade: string;
+  rank_in_batch?: number;
+  test_date: string;
+}
+
+// Helper: Returns podium badge styling and label based on performance percentage
+const getPerformanceBadge = (obtained: number, total: number) => {
+  if (total <= 0) return null;
+  const pct = Math.round((obtained / total) * 100);
+
+  if (pct >= 90) {
+    return {
+      tier: '1st Tier',
+      medal: '🥇',
+      label: 'Distinction',
+      cardBorder: 'border-amber-300 bg-gradient-to-r from-amber-50/80 via-yellow-50/50 to-white',
+      badgeStyle: 'bg-gradient-to-r from-amber-500 to-yellow-500 text-white shadow-xs',
+    };
+  }
+
+  if (pct >= 80) {
+    return {
+      tier: '2nd Tier',
+      medal: '🥈',
+      label: 'Merit',
+      cardBorder: 'border-slate-300 bg-gradient-to-r from-slate-100/80 via-slate-50/50 to-white',
+      badgeStyle: 'bg-gradient-to-r from-slate-500 to-slate-600 text-white shadow-xs',
+    };
+  }
+
+  if (pct >= 70) {
+    return {
+      tier: '3rd Tier',
+      medal: '🥉',
+      label: 'Honors',
+      cardBorder: 'border-amber-700/30 bg-gradient-to-r from-orange-50/70 via-amber-50/40 to-white',
+      badgeStyle: 'bg-gradient-to-r from-amber-700 to-amber-800 text-white shadow-xs',
+    };
+  }
+
+  // Under 70%: standard display (no badge)
+  return null;
+};
 
 export const StudentDashboard: React.FC = () => {
   const { currentUser, logout } = useAuth();
@@ -56,6 +108,10 @@ export const StudentDashboard: React.FC = () => {
   const [selectedSubject, setSelectedSubject] = useState<string>(enrolledSubjects[0] || 'Mathematics');
   const [dbMaterials, setDbMaterials] = useState<MaterialItem[]>([]);
   const [isLoadingMaterials, setIsLoadingMaterials] = useState<boolean>(false);
+
+  // Live Test Results State
+  const [liveTestResults, setLiveTestResults] = useState<TestResultItem[]>([]);
+  const [isLoadingResults, setIsLoadingResults] = useState<boolean>(false);
 
   const studentName = currentUser?.name || 'Aarav Patel';
   const studentPhone = currentUser?.phone || '9900011101';
@@ -101,6 +157,32 @@ export const StudentDashboard: React.FC = () => {
     fetchSubjectMaterials();
   }, [selectedSubject]);
 
+  // Fetch live test results published for this student
+  useEffect(() => {
+    const fetchStudentTestResults = async () => {
+      if (!currentUser?.id) return;
+      setIsLoadingResults(true);
+
+      try {
+        const { data, error } = await supabase
+          .from('test_results')
+          .select('*')
+          .eq('student_id', currentUser.id)
+          .order('test_date', { ascending: false });
+
+        if (!error && data) {
+          setLiveTestResults(data);
+        }
+      } catch (err: any) {
+        console.error('Error fetching student test results:', err.message);
+      } finally {
+        setIsLoadingResults(false);
+      }
+    };
+
+    fetchStudentTestResults();
+  }, [currentUser?.id]);
+
   // Combine LibraryContext chapters with live uploaded Supabase materials
   const contextChapters = chapters.filter((c: any) => c.subject === selectedSubject);
 
@@ -121,7 +203,7 @@ export const StudentDashboard: React.FC = () => {
       chapterNumber: contextChapters.length + idx + 1,
       totalPages: m.page_count || 'Study Notes',
       pdfUrl: m.pdf_url,
-      isUnlocked: m.is_unlocked ?? true, // Reads live teacher lock state
+      isUnlocked: m.is_unlocked ?? true,
       subject: m.subject
     }))
   ];
@@ -134,11 +216,6 @@ export const StudentDashboard: React.FC = () => {
     { id: 1, title: 'Calculus Problem Set 4', subject: 'Mathematics', dueDate: 'Tomorrow, 5:00 PM', status: 'Pending' },
     { id: 2, title: 'Optics Lab Report', subject: 'Physics', dueDate: '22 Sep 2026', status: 'Submitted' },
     { id: 3, title: 'Organic Reaction Mechanism', subject: 'Chemistry', dueDate: '24 Sep 2026', status: 'Pending' },
-  ];
-
-  const testResults = [
-    { id: 1, exam: 'Unit Test 2', score: '23/25', grade: 'A+', date: '15 Sep 2026' },
-    { id: 2, exam: 'Mid-Term Evaluation', score: '45/50', grade: 'A', date: '08 Sep 2026' },
   ];
 
   const quickCards = [
@@ -181,7 +258,7 @@ export const StudentDashboard: React.FC = () => {
     {
       id: 'results',
       title: 'Test Results',
-      subtitle: 'Scores & Reports',
+      subtitle: liveTestResults.length > 0 ? `${liveTestResults.length} Reports Published` : 'Scores & Rankings',
       icon: Award,
       iconBg: 'bg-purple-100 text-purple-600',
       cardBg: 'bg-purple-50/60 border-purple-100',
@@ -318,7 +395,7 @@ export const StudentDashboard: React.FC = () => {
                   {activeModal === 'profile' && 'Student Profile'}
                   {activeModal === 'attendance' && 'Daily Attendance Calendar'}
                   {activeModal === 'assignment' && 'Assigned Homework'}
-                  {activeModal === 'results' && 'Academic Performance'}
+                  {activeModal === 'results' && 'Academic Performance & Rankings'}
                 </h3>
                 <button
                   onClick={() => setActiveModal(null)}
@@ -328,10 +405,9 @@ export const StudentDashboard: React.FC = () => {
                 </button>
               </div>
 
-              {/* 1. E-LIBRARY (STREAM FILTERED & TEACHER LOCK ENFORCED) */}
+              {/* 1. E-LIBRARY */}
               {activeModal === 'library' && (
                 <div className="space-y-4 text-xs">
-                  {/* Subject Tabs */}
                   <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
                     {enrolledSubjects.map((sub) => (
                       <button
@@ -348,7 +424,6 @@ export const StudentDashboard: React.FC = () => {
                     ))}
                   </div>
 
-                  {/* Chapters List */}
                   <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                     {isLoadingMaterials ? (
                       <div className="flex justify-center py-8 text-slate-400">
@@ -360,7 +435,6 @@ export const StudentDashboard: React.FC = () => {
                       </p>
                     ) : (
                       combinedChapters.map((chap: any) => {
-                        // Strict check: must be unlocked by teacher AND student must be paid
                         const isTeacherUnlocked = chap.isUnlocked !== false;
                         const canRead = isPaid && isTeacherUnlocked;
 
@@ -429,7 +503,7 @@ export const StudentDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 3. ATTENDANCE & DATE-WISE CALENDAR */}
+              {/* 3. ATTENDANCE */}
               {activeModal === 'attendance' && (
                 <div className="space-y-4">
                   <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-between">
@@ -488,21 +562,105 @@ export const StudentDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 6. RESULTS */}
+              {/* 6. RESULTS & PODIUM PERFORMANCE BADGES */}
               {activeModal === 'results' && (
-                <div className="space-y-3">
-                  {testResults.map((res) => (
-                    <div key={res.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
-                      <div>
-                        <p className="text-xs font-bold text-slate-800">{res.exam}</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{res.date}</p>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-xs font-bold text-indigo-600 block">{res.score}</span>
-                        <span className="text-[10px] text-emerald-600 font-semibold">Grade {res.grade}</span>
-                      </div>
+                <div className="space-y-3 text-xs">
+                  {isLoadingResults ? (
+                    <div className="flex justify-center py-8 text-slate-400">
+                      <Loader2 className="w-5 h-5 animate-spin" />
                     </div>
-                  ))}
+                  ) : liveTestResults.length === 0 ? (
+                    <p className="text-center text-slate-400 py-6 text-xs bg-slate-50 rounded-2xl">
+                      No test reports published yet.
+                    </p>
+                  ) : (
+                    liveTestResults.map((res) => {
+                      const badge = getPerformanceBadge(res.marks_obtained, res.total_marks);
+                      const percentage = Math.round((res.marks_obtained / res.total_marks) * 100);
+
+                      return (
+                        <div
+                          key={res.id}
+                          className={`p-3.5 rounded-2xl border transition-all ${
+                            badge
+                              ? `${badge.cardBorder} shadow-xs`
+                              : 'bg-slate-50 border-slate-100 hover:border-slate-200'
+                          }`}
+                        >
+                          {/* Top row: Test Name, Subject, and Special Tier Badge */}
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-800 text-xs">
+                                {res.test_name}
+                              </span>
+                              <span className="text-[9px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-md font-bold uppercase">
+                                {res.subject}
+                              </span>
+                            </div>
+
+                            {/* Highlighted Podium Badge for 90+, 80+, 70+ */}
+                            {badge && (
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${badge.badgeStyle}`}
+                              >
+                                <span>{badge.medal}</span>
+                                <span>{badge.tier}</span>
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Bottom row: Date & Batch Rank on left, Clean Score on right */}
+                          <div className="flex items-end justify-between mt-2 pt-2 border-t border-slate-100/80">
+                            <div>
+                              <span className="text-[10px] text-slate-400 font-medium block">
+                                {new Date(res.test_date).toLocaleDateString('en-GB', {
+                                  day: 'numeric',
+                                  month: 'short',
+                                  year: 'numeric',
+                                })}
+                              </span>
+                              {res.rank_in_batch && (
+                                <span className="text-[10px] font-bold text-amber-600 block mt-0.5">
+                                  Batch Rank #{res.rank_in_batch}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <div className="text-right">
+                                <span className="text-sm font-extrabold text-slate-800 block leading-tight">
+                                  {res.marks_obtained}
+                                  <span className="text-[10px] text-slate-400 font-medium">
+                                    /{res.total_marks}
+                                  </span>
+                                </span>
+                                <span className="text-[10px] text-slate-500 font-semibold">
+                                  {percentage}%
+                                </span>
+                              </div>
+
+                              {/* Grade Pill */}
+                              <span
+                                className={`w-7 h-7 rounded-xl font-bold flex items-center justify-center text-xs shrink-0 ${
+                                  percentage >= 90
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : percentage >= 80
+                                    ? 'bg-slate-200 text-slate-800'
+                                    : percentage >= 70
+                                    ? 'bg-amber-100/70 text-amber-900'
+                                    : percentage >= 50
+                                    ? 'bg-blue-100 text-blue-700'
+                                    : 'bg-rose-100 text-rose-700'
+                                }`}
+                              >
+                                {res.grade}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               )}
 

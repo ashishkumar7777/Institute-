@@ -21,7 +21,13 @@ import {
   Lock,
   Loader2,
   ExternalLink,
-  CheckCircle2
+  CheckCircle2,
+  Pencil,
+  Trash2,
+  XCircle,
+  UserCheck,
+  Calendar as CalendarIcon,
+  Send
 } from 'lucide-react';
 
 interface StudentProfile {
@@ -33,7 +39,7 @@ interface StudentProfile {
   enrolled_subjects: string[];
 }
 
-type TeacherModal = 'attendance' | 'notes' | 'marks' | 'assignments' | 'fees' | 'syllabus' | null;
+type TeacherModal = 'attendance' | 'notes' | 'marks' | 'assignments' | 'fees' | 'syllabus' | 'students' | null;
 
 // Helper: Formats any Google Drive sharing/view link into an embeddable, view-only /preview URL
 const formatGoogleDrivePreviewUrl = (url: string): string => {
@@ -42,6 +48,19 @@ const formatGoogleDrivePreviewUrl = (url: string): string => {
     return `https://drive.google.com/file/d/${match[1]}/preview`;
   }
   return url.trim();
+};
+
+// Helper: Computes Grade based on percentage
+const computeGrade = (obtained: number, total: number): string => {
+  if (total <= 0) return 'F';
+  const pct = (obtained / total) * 100;
+  if (pct >= 90) return 'A+';
+  if (pct >= 80) return 'A';
+  if (pct >= 70) return 'B+';
+  if (pct >= 60) return 'B';
+  if (pct >= 50) return 'C';
+  if (pct >= 40) return 'D';
+  return 'F';
 };
 
 export const TeacherDashboard: React.FC = () => {
@@ -65,6 +84,22 @@ export const TeacherDashboard: React.FC = () => {
   const [dbMaterials, setDbMaterials] = useState<any[]>([]);
   const [isLoadingMaterials, setIsLoadingMaterials] = useState<boolean>(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  // Editing & Deleting states for notes
+  const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
+  const [deletingMaterialId, setDeletingMaterialId] = useState<string | null>(null);
+
+  // Selected student for detailed calendar inspection
+  const [selectedStudentForCalendar, setSelectedStudentForCalendar] = useState<StudentProfile | null>(null);
+  const [studentAttendanceHistory, setStudentAttendanceHistory] = useState<Record<string, string>>({});
+  const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
+
+  // Dynamic Exam States
+  const [examName, setExamName] = useState<string>('Unit Test 1');
+  const [examTotalMarks, setExamTotalMarks] = useState<number>(100);
+  const [examDate, setExamDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [marksInputState, setMarksInputState] = useState<Record<string, number>>({});
+  const [isPublishingMarks, setIsPublishingMarks] = useState<boolean>(false);
 
   // Fetch live materials uploaded to Supabase for this subject
   const fetchLiveMaterials = async () => {
@@ -99,6 +134,7 @@ export const TeacherDashboard: React.FC = () => {
       chapterNumber: c.chapter_number ?? c.chapterNumber ?? 1,
       totalPages: c.total_pages ?? c.totalPages ?? '14 Pages',
       isUnlocked: c.isUnlocked ?? true,
+      pdfUrl: c.pdf_url || c.pdfUrl || '',
       isDbMaterial: false,
     })),
     ...dbMaterials.map((m: any, idx: number) => ({
@@ -107,6 +143,7 @@ export const TeacherDashboard: React.FC = () => {
       chapterNumber: contextChapters.length + idx + 1,
       totalPages: m.page_count || 'Study Notes',
       isUnlocked: m.is_unlocked ?? true,
+      pdfUrl: m.pdf_url || '',
       isDbMaterial: true,
     })),
   ];
@@ -117,14 +154,12 @@ export const TeacherDashboard: React.FC = () => {
   const handleToggleChapterLock = async (chap: any) => {
     const newStatus = !chap.isUnlocked;
 
-    // 1. Optimistic UI update
     setDbMaterials((prev) =>
       prev.map((item) =>
         item.id === chap.id ? { ...item, is_unlocked: newStatus } : item
       )
     );
 
-    // 2. Persist to Supabase if it's an uploaded material
     if (chap.isDbMaterial) {
       setTogglingId(chap.id);
       try {
@@ -136,7 +171,6 @@ export const TeacherDashboard: React.FC = () => {
         if (error) throw error;
       } catch (err: any) {
         console.error('Failed to toggle lock status:', err.message);
-        // Rollback on error
         setDbMaterials((prev) =>
           prev.map((item) =>
             item.id === chap.id ? { ...item, is_unlocked: !newStatus } : item
@@ -148,7 +182,7 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Form states for uploading Google Drive Notes / Syllabus
+  // Form states for uploading / editing Google Drive Notes
   const [chapterTitle, setChapterTitle] = useState('');
   const [rawDriveUrl, setRawDriveUrl] = useState('');
   const [pageCount, setPageCount] = useState('12 Pages');
@@ -157,13 +191,6 @@ export const TeacherDashboard: React.FC = () => {
 
   // Attendance state: { [studentId]: 'PRESENT' | 'ABSENT' }
   const [attendanceState, setAttendanceState] = useState<Record<string, 'PRESENT' | 'ABSENT'>>({});
-
-  const [marksState] = useState<Record<string, string>>({
-    std_01: '23',
-    std_02: '19',
-    std_03: '21',
-  });
-
   const [uploadedNotesCount, setUploadedNotesCount] = useState(4);
 
   // Fetch live students enrolled in this teacher's subject
@@ -177,7 +204,6 @@ export const TeacherDashboard: React.FC = () => {
 
       if (error) throw error;
 
-      // Filter by subject matching either string or array entries
       const students = ((data as StudentProfile[]) || []).filter((s: any) => {
         if (!s.enrolled_subjects) return true;
         if (Array.isArray(s.enrolled_subjects)) {
@@ -188,12 +214,15 @@ export const TeacherDashboard: React.FC = () => {
 
       setAssignedStudents(students);
 
-      // Default all fetched students to PRESENT for today
+      // Default attendance to PRESENT for today
       const initialAttendance: Record<string, 'PRESENT' | 'ABSENT'> = {};
+      const initialMarks: Record<string, number> = {};
       students.forEach((s) => {
         initialAttendance[s.id] = 'PRESENT';
+        initialMarks[s.id] = Math.round(examTotalMarks * 0.75);
       });
       setAttendanceState(initialAttendance);
+      setMarksInputState(initialMarks);
     } catch (err: any) {
       console.error('Error fetching students:', err.message);
     } finally {
@@ -204,6 +233,68 @@ export const TeacherDashboard: React.FC = () => {
   useEffect(() => {
     fetchStudents();
   }, [teacherSubject]);
+
+  // Sync marks input defaults when total marks change
+  useEffect(() => {
+    if (assignedStudents.length > 0) {
+      setMarksInputState((prev) => {
+        const next: Record<string, number> = { ...prev };
+        assignedStudents.forEach((s) => {
+          if (next[s.id] === undefined || next[s.id] > examTotalMarks) {
+            next[s.id] = Math.round(examTotalMarks * 0.75);
+          }
+        });
+        return next;
+      });
+    }
+  }, [examTotalMarks, assignedStudents]);
+
+  // Toggle Fee Status (PAID / UNPAID) for a student directly from teacher panel
+  const handleToggleStudentFee = async (studentId: string, currentStatus: string) => {
+    const nextStatus = currentStatus === 'PAID' ? 'UNPAID' : 'PAID';
+
+    setAssignedStudents((prev) =>
+      prev.map((s) => (s.id === studentId ? { ...s, fee_status: nextStatus } : s))
+    );
+
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ fee_status: nextStatus })
+        .eq('id', studentId);
+
+      if (error) throw error;
+    } catch (err: any) {
+      console.error('Failed to update fee status:', err.message);
+      alert('Error updating fee status: ' + err.message);
+      await fetchStudents();
+    }
+  };
+
+  // Fetch student's attendance history for calendar display
+  const loadStudentAttendanceCalendar = async (student: StudentProfile) => {
+    setSelectedStudentForCalendar(student);
+    setIsLoadingHistory(true);
+    try {
+      const { data, error } = await supabase
+        .from('attendance_records')
+        .select('attendance_date, status')
+        .eq('student_id', student.id)
+        .eq('subject', teacherSubject);
+
+      if (error) throw error;
+
+      const historyMap: Record<string, string> = {};
+      (data || []).forEach((row: any) => {
+        historyMap[row.attendance_date] = row.status;
+      });
+      setStudentAttendanceHistory(historyMap);
+    } catch (err: any) {
+      console.error('Failed to load student attendance:', err.message);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
 
   const toggleAttendance = (id: string) => {
     setAttendanceState((prev) => ({
@@ -253,7 +344,98 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Upload/Publish Google Drive PDF link directly to Supabase syllabus_materials
+  // Publish dynamic test marks and calculate ranks
+  const handlePublishExamMarks = async () => {
+    if (assignedStudents.length === 0) {
+      alert('No students enrolled to grade.');
+      return;
+    }
+    if (!examName.trim()) {
+      alert('Please enter a test/exam title.');
+      return;
+    }
+    if (examTotalMarks <= 0) {
+      alert('Maximum marks must be greater than zero.');
+      return;
+    }
+
+    setIsPublishingMarks(true);
+
+    try {
+      // 1. Sort students by marks descending to compute rank
+      const sortedStudents = [...assignedStudents].sort((a, b) => {
+        const scoreA = marksInputState[a.id] ?? 0;
+        const scoreB = marksInputState[b.id] ?? 0;
+        return scoreB - scoreA;
+      });
+
+      // 2. Prepare payload with calculated ranks and letter grades
+      const payload = sortedStudents.map((student, index) => {
+        const obtained = Math.min(examTotalMarks, Math.max(0, Number(marksInputState[student.id]) || 0));
+        return {
+          test_name: examName.trim(),
+          subject: teacherSubject,
+          total_marks: examTotalMarks,
+          marks_obtained: obtained,
+          grade: computeGrade(obtained, examTotalMarks),
+          rank_in_batch: index + 1,
+          test_date: examDate,
+          student_id: student.id,
+          teacher_id: currentUser?.id,
+        };
+      });
+
+      const { error } = await supabase.from('test_results').insert(payload);
+      if (error) throw error;
+
+      alert(`Marks for "${examName}" published successfully! Report cards and batch ranks are now live for students.`);
+      setActiveModal(null);
+    } catch (err: any) {
+      console.error('Failed to publish marks:', err.message);
+      alert('Error publishing marks: ' + err.message);
+    } finally {
+      setIsPublishingMarks(false);
+    }
+  };
+
+  // Note Edit Handlers
+  const handleStartEditMaterial = (chap: any) => {
+    setEditingMaterialId(chap.id);
+    setChapterTitle(chap.title);
+    setRawDriveUrl(chap.pdfUrl);
+    setPageCount(chap.totalPages);
+    setActiveModal('notes');
+  };
+
+  const handleCancelEditMaterial = () => {
+    setEditingMaterialId(null);
+    setChapterTitle('');
+    setRawDriveUrl('');
+    setPageCount('12 Pages');
+  };
+
+  const handleDeleteMaterial = async (materialId: string, title: string) => {
+    const confirmDelete = window.confirm(`Are you sure you want to delete "${title}"? Students will immediately lose access.`);
+    if (!confirmDelete) return;
+
+    setDeletingMaterialId(materialId);
+    try {
+      const { error } = await supabase
+        .from('syllabus_materials')
+        .delete()
+        .eq('id', materialId);
+
+      if (error) throw error;
+
+      setDbMaterials((prev) => prev.filter((m) => m.id !== materialId));
+    } catch (err: any) {
+      console.error('Failed to delete chapter notes:', err.message);
+      alert('Failed to delete: ' + err.message);
+    } finally {
+      setDeletingMaterialId(null);
+    }
+  };
+
   const handlePublishDrivePdf = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chapterTitle.trim() || !rawDriveUrl.trim()) {
@@ -267,31 +449,45 @@ export const TeacherDashboard: React.FC = () => {
     try {
       const embedUrl = formatGoogleDrivePreviewUrl(rawDriveUrl);
 
-      const { error } = await supabase.from('syllabus_materials').insert({
-        subject: teacherSubject,
-        chapter_title: chapterTitle.trim(),
-        page_count: pageCount.trim() || 'Study Notes',
-        pdf_url: embedUrl,
-        is_unlocked: true,
-      });
+      if (editingMaterialId) {
+        const { error } = await supabase
+          .from('syllabus_materials')
+          .update({
+            chapter_title: chapterTitle.trim(),
+            page_count: pageCount.trim() || 'Study Notes',
+            pdf_url: embedUrl,
+          })
+          .eq('id', editingMaterialId);
 
-      if (error) throw error;
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('syllabus_materials').insert({
+          subject: teacherSubject,
+          chapter_title: chapterTitle.trim(),
+          page_count: pageCount.trim() || 'Study Notes',
+          pdf_url: embedUrl,
+          is_unlocked: true,
+        });
 
-      // Re-fetch live list so Chapter Unlocker updates immediately
+        if (error) throw error;
+        setUploadedNotesCount((prev) => prev + 1);
+      }
+
       await fetchLiveMaterials();
 
       setUploadSuccess(true);
-      setUploadedNotesCount((prev) => prev + 1);
       setChapterTitle('');
       setRawDriveUrl('');
+      setPageCount('12 Pages');
+      setEditingMaterialId(null);
 
       setTimeout(() => {
         setUploadSuccess(false);
-        setActiveModal(null);
-      }, 1500);
+        setActiveModal('syllabus');
+      }, 1200);
     } catch (err: any) {
-      console.error('Upload failed:', err.message);
-      alert('Failed to publish material: ' + err.message);
+      console.error('Save failed:', err.message);
+      alert('Failed to save material: ' + err.message);
     } finally {
       setIsPublishingNote(false);
     }
@@ -324,18 +520,30 @@ export const TeacherDashboard: React.FC = () => {
       action: () => setActiveModal('attendance'),
     },
     {
+      id: 'students',
+      title: 'Student Profiles',
+      subtitle: `${assignedStudents.length} Enrolled • Track Fees`,
+      icon: UserCheck,
+      iconBg: 'bg-teal-100 text-teal-600',
+      cardBg: 'bg-teal-50/60 border-teal-100',
+      action: () => setActiveModal('students'),
+    },
+    {
       id: 'notes',
       title: 'Upload Class Notes',
       subtitle: `${uploadedNotesCount} sheets pushed`,
       icon: Camera,
       iconBg: 'bg-indigo-100 text-indigo-600',
       cardBg: 'bg-indigo-50/60 border-indigo-100',
-      action: () => setActiveModal('notes'),
+      action: () => {
+        handleCancelEditMaterial();
+        setActiveModal('notes');
+      },
     },
     {
       id: 'marks',
       title: 'Enter Test Marks',
-      subtitle: 'Unit Test 2 (25 Marks)',
+      subtitle: `${examName} (Out of ${examTotalMarks})`,
       icon: Award,
       iconBg: 'bg-purple-100 text-purple-600',
       cardBg: 'bg-purple-50/60 border-purple-100',
@@ -404,7 +612,7 @@ export const TeacherDashboard: React.FC = () => {
         {/* Real-Time Live Institute Broadcast Strip */}
         <NoticeBanner />
 
-        {/* Quick Access Grid */}
+        {/* Quick Access Grid (6 Cards) */}
         <div className="px-5 py-5 flex-1 overflow-y-auto">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-base font-bold text-slate-800 tracking-tight">Classroom Controls</h2>
@@ -437,7 +645,7 @@ export const TeacherDashboard: React.FC = () => {
             })}
           </div>
 
-          {/* Quick Roster (Live Supabase Students) */}
+          {/* Quick Roster */}
           <div className="mt-5">
             <div className="flex items-center justify-between mb-2.5">
               <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
@@ -468,15 +676,17 @@ export const TeacherDashboard: React.FC = () => {
                         <p className="text-[10px] text-slate-400">Attendance: {student.attendance_rate ?? 100}%</p>
                       </div>
                     </div>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                    <button
+                      onClick={() => handleToggleStudentFee(student.id, student.fee_status)}
+                      title="Tap to toggle fee status"
+                      className={`text-[10px] px-2 py-0.5 rounded font-bold transition active:scale-95 ${
                         student.fee_status === 'PAID'
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-rose-100 text-rose-700'
+                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                          : 'bg-rose-100 text-rose-700 hover:bg-rose-200'
                       }`}
                     >
                       {student.fee_status}
-                    </span>
+                    </button>
                   </div>
                 ))}
               </div>
@@ -521,19 +731,24 @@ export const TeacherDashboard: React.FC = () => {
                 <h3 className="font-bold text-lg text-slate-800 capitalize">
                   {activeModal === 'syllabus' && `${teacherSubject} Chapter Unlocker`}
                   {activeModal === 'attendance' && "Today's Attendance"}
-                  {activeModal === 'notes' && `Upload ${teacherSubject} Class Notes`}
-                  {activeModal === 'marks' && 'Enter Exam Scores (Unit Test 2)'}
+                  {activeModal === 'students' && `${teacherSubject} Students Directory`}
+                  {activeModal === 'notes' && (editingMaterialId ? `Edit ${teacherSubject} Class Notes` : `Upload ${teacherSubject} Class Notes`)}
+                  {activeModal === 'marks' && `Grade & Rank: ${teacherSubject}`}
                   {activeModal === 'fees' && 'Fee Reminder List'}
                 </h3>
                 <button
-                  onClick={() => setActiveModal(null)}
+                  onClick={() => {
+                    handleCancelEditMaterial();
+                    setSelectedStudentForCalendar(null);
+                    setActiveModal(null);
+                  }}
                   className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              {/* 1. SYLLABUS UNLOCKER (INTERACTIVE LOCK/UNLOCK TOGGLE) */}
+              {/* 1. SYLLABUS UNLOCKER */}
               {activeModal === 'syllabus' && (
                 <div className="space-y-3 text-xs">
                   <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl flex items-center justify-between">
@@ -544,7 +759,10 @@ export const TeacherDashboard: React.FC = () => {
                       </p>
                     </div>
                     <button
-                      onClick={() => setActiveModal('notes')}
+                      onClick={() => {
+                        handleCancelEditMaterial();
+                        setActiveModal('notes');
+                      }}
                       className="px-2.5 py-1.5 bg-blue-600 text-white rounded-lg text-[10px] font-bold shadow hover:bg-blue-700"
                     >
                       + Add New PDF
@@ -560,10 +778,10 @@ export const TeacherDashboard: React.FC = () => {
                       {allTeacherChapters.map((chap: any) => (
                         <div
                           key={chap.id}
-                          className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-slate-50"
+                          className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-slate-50 hover:border-slate-200 transition"
                         >
-                          <div className="pr-2">
-                            <span className="font-bold text-slate-800">
+                          <div className="pr-2 flex-1 min-w-0">
+                            <span className="font-bold text-slate-800 block truncate">
                               Ch {chap.chapterNumber}: {chap.title}
                             </span>
                             <span className="block text-[10px] text-slate-400">
@@ -571,31 +789,59 @@ export const TeacherDashboard: React.FC = () => {
                             </span>
                           </div>
 
-                          {/* Interactive Toggle Button */}
-                          <button
-                            type="button"
-                            disabled={togglingId === chap.id}
-                            onClick={() => handleToggleChapterLock(chap)}
-                            className={`px-3 py-1.5 rounded-lg font-bold text-[10px] flex items-center gap-1.5 transition active:scale-95 shadow-sm ${
-                              chap.isUnlocked
-                                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                                : 'bg-rose-100 text-rose-700 hover:bg-rose-200'
-                            }`}
-                          >
-                            {togglingId === chap.id ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : chap.isUnlocked ? (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              disabled={togglingId === chap.id}
+                              onClick={() => handleToggleChapterLock(chap)}
+                              className={`px-2.5 py-1.5 rounded-lg font-bold text-[10px] flex items-center gap-1 transition active:scale-95 shadow-xs ${
+                                chap.isUnlocked
+                                  ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                  : 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+                              }`}
+                            >
+                              {togglingId === chap.id ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : chap.isUnlocked ? (
+                                <>
+                                  <Unlock className="w-3 h-3 text-emerald-600" />
+                                  <span>Unlocked</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Lock className="w-3 h-3 text-rose-600" />
+                                  <span>Locked</span>
+                                </>
+                              )}
+                            </button>
+
+                            {chap.isDbMaterial && (
                               <>
-                                <Unlock className="w-3 h-3 text-emerald-600" />
-                                <span>Unlocked</span>
-                              </>
-                            ) : (
-                              <>
-                                <Lock className="w-3 h-3 text-rose-600" />
-                                <span>Locked</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditMaterial(chap)}
+                                  title="Edit Note Details"
+                                  className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition active:scale-95"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  disabled={deletingMaterialId === chap.id}
+                                  onClick={() => handleDeleteMaterial(chap.id, chap.title)}
+                                  title="Delete Note"
+                                  className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition active:scale-95 disabled:opacity-50"
+                                >
+                                  {deletingMaterialId === chap.id ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
                               </>
                             )}
-                          </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -603,7 +849,7 @@ export const TeacherDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 2. ATTENDANCE (LIVE LOGGING TO SUPABASE) */}
+              {/* 2. ATTENDANCE SUBMISSION */}
               {activeModal === 'attendance' && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 p-3 rounded-xl text-xs">
@@ -657,14 +903,144 @@ export const TeacherDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 3. NOTES / SYLLABUS PDF UPLOADER VIA GOOGLE DRIVE */}
+              {/* 3. STUDENT DIRECTORY, ATTENDANCE CALENDAR & LIVE FEE TOGGLE */}
+              {activeModal === 'students' && (
+                <div className="space-y-4 text-xs">
+                  {selectedStudentForCalendar ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
+                        <div>
+                          <p className="font-bold text-slate-800 text-sm">{selectedStudentForCalendar.name}</p>
+                          <p className="text-[10px] text-slate-400">Attendance Log • {teacherSubject}</p>
+                        </div>
+                        <button
+                          onClick={() => setSelectedStudentForCalendar(null)}
+                          className="px-2.5 py-1 bg-slate-200 text-slate-700 font-bold rounded-lg text-[10px]"
+                        >
+                          ← Back to All
+                        </button>
+                      </div>
+
+                      {isLoadingHistory ? (
+                        <div className="flex justify-center py-8 text-slate-400">
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-white border border-slate-200 rounded-2xl shadow-xs">
+                          <div className="grid grid-cols-7 gap-1 text-center font-bold text-slate-400 text-[10px] mb-2">
+                            <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+                          </div>
+                          
+                          <div className="grid grid-cols-7 gap-1.5 text-center">
+                            {Array.from({ length: 30 }).map((_, i) => {
+                              const day = i + 1;
+                              const dateStr = `2026-10-${day < 10 ? '0' + day : day}`;
+                              const status = studentAttendanceHistory[dateStr];
+
+                              return (
+                                <div
+                                  key={day}
+                                  className={`h-8 rounded-lg flex flex-col items-center justify-center text-[10px] font-bold border transition ${
+                                    status === 'PRESENT'
+                                      ? 'bg-emerald-100 border-emerald-300 text-emerald-800'
+                                      : status === 'ABSENT'
+                                      ? 'bg-rose-100 border-rose-300 text-rose-800'
+                                      : 'bg-slate-50 border-slate-100 text-slate-400'
+                                  }`}
+                                  title={status ? `${dateStr}: ${status}` : `${dateStr}: No class`}
+                                >
+                                  <span>{day}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          <div className="flex justify-center gap-4 mt-3 pt-2 border-t border-slate-100 text-[10px]">
+                            <span className="flex items-center gap-1 text-emerald-700 font-semibold">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" /> Present
+                            </span>
+                            <span className="flex items-center gap-1 text-rose-700 font-semibold">
+                              <span className="w-2.5 h-2.5 rounded-full bg-rose-500" /> Absent
+                            </span>
+                            <span className="flex items-center gap-1 text-slate-400">
+                              <span className="w-2.5 h-2.5 rounded-full bg-slate-200" /> No Session
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                      <div className="p-2.5 bg-teal-50 border border-teal-100 rounded-xl text-teal-800 text-[11px] flex justify-between items-center">
+                        <span>Tap <strong>PAID / UNPAID</strong> to toggle fee status.</span>
+                        <span className="font-bold">{assignedStudents.length} Students</span>
+                      </div>
+
+                      {assignedStudents.map((s) => (
+                        <div
+                          key={s.id}
+                          className="p-3 bg-slate-50/80 border border-slate-100 rounded-2xl flex items-center justify-between"
+                        >
+                          <div>
+                            <p className="font-bold text-slate-800 text-xs">{s.name}</p>
+                            <p className="text-[10px] text-slate-400 font-mono mt-0.5">{s.phone}</p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => loadStudentAttendanceCalendar(s)}
+                              title="View Attendance Calendar"
+                              className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold text-[10px] flex items-center gap-1 hover:bg-slate-100 shadow-2xs"
+                            >
+                              <CalendarIcon className="w-3 h-3 text-teal-600" />
+                              <span>{s.attendance_rate ?? 100}%</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStudentFee(s.id, s.fee_status)}
+                              title="Click to toggle fee paid status"
+                              className={`px-2.5 py-1.5 rounded-lg font-bold text-[10px] transition active:scale-95 shadow-2xs ${
+                                s.fee_status === 'PAID'
+                                  ? 'bg-emerald-100 text-emerald-700 hover:bg-rose-100 hover:text-rose-700'
+                                  : 'bg-rose-100 text-rose-700 hover:bg-emerald-100 hover:text-emerald-700'
+                              }`}
+                            >
+                              {s.fee_status}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 4. NOTES / SYLLABUS PDF UPLOADER */}
               {activeModal === 'notes' && (
                 <form onSubmit={handlePublishDrivePdf} className="space-y-4 text-xs">
-                  <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-900">
-                    <p className="font-bold">Target Stream: {teacherSubject}</p>
-                    <p className="text-[11px] text-indigo-700 mt-0.5">
-                      Paste the Google Drive PDF share link. It will automatically convert to a secured, non-downloadable reader for students.
-                    </p>
+                  <div className="flex items-center justify-between p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-900">
+                    <div>
+                      <p className="font-bold">
+                        {editingMaterialId ? `Edit Notes (${teacherSubject})` : `Target Stream: ${teacherSubject}`}
+                      </p>
+                      <p className="text-[11px] text-indigo-700 mt-0.5">
+                        Paste the Google Drive PDF share link. It converts to a secured, non-downloadable reader for students.
+                      </p>
+                    </div>
+                    {editingMaterialId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleCancelEditMaterial();
+                          setActiveModal('syllabus');
+                        }}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-800 flex items-center gap-1 font-semibold"
+                      >
+                        <XCircle className="w-3.5 h-3.5" /> Cancel
+                      </button>
+                    )}
                   </div>
 
                   <div>
@@ -726,50 +1102,139 @@ export const TeacherDashboard: React.FC = () => {
                     ) : uploadSuccess ? (
                       <>
                         <CheckCircle2 className="w-4 h-4" />
-                        Published Successfully!
+                        {editingMaterialId ? 'Updated Successfully!' : 'Published Successfully!'}
                       </>
                     ) : (
                       <>
                         <UploadCloud className="w-4 h-4" />
-                        Publish Notes for {teacherSubject}
+                        {editingMaterialId ? 'Update Notes' : `Publish Notes for ${teacherSubject}`}
                       </>
                     )}
                   </button>
                 </form>
               )}
 
-              {/* 4. MARKS */}
+              {/* 5. DYNAMIC TEST MARKS ENTRY & AUTOMATED BATCH RANKING */}
               {activeModal === 'marks' && (
-                <div className="space-y-3 text-xs">
-                  <div className="flex justify-between items-center text-slate-500 font-semibold mb-1">
-                    <span>Student Name</span>
-                    <span>Marks / 25</span>
-                  </div>
-                  {assignedStudents.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-100">
-                      <span className="font-bold text-slate-800">{s.name}</span>
+                <div className="space-y-3.5 text-xs">
+                  {/* Test Setup Form Box */}
+                  <div className="p-3.5 bg-purple-50/70 border border-purple-100 rounded-2xl space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-purple-900 text-xs">Test Configuration ({teacherSubject})</span>
+                      <span className="text-[10px] bg-purple-200 text-purple-800 font-bold px-2 py-0.5 rounded-full">
+                        Auto-Ranking
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-semibold text-purple-800 mb-0.5">Test Name / Title</label>
                       <input
-                        type="number"
-                        defaultValue={marksState[s.id] || '20'}
-                        max="25"
-                        min="0"
-                        className="w-16 p-1.5 text-center font-bold border border-slate-200 rounded-lg bg-white"
+                        type="text"
+                        placeholder="e.g. Periodic Test 1 or Mid-Term Exam"
+                        value={examName}
+                        onChange={(e) => setExamName(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-purple-200 rounded-xl font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-purple-500 text-xs"
                       />
                     </div>
-                  ))}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] font-semibold text-purple-800 mb-0.5">Maximum Marks</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="1000"
+                          value={examTotalMarks}
+                          onChange={(e) => setExamTotalMarks(Number(e.target.value) || 100)}
+                          className="w-full px-3 py-2 bg-white border border-purple-200 rounded-xl font-bold text-slate-800 text-xs text-center"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-semibold text-purple-800 mb-0.5">Test Date</label>
+                        <input
+                          type="date"
+                          value={examDate}
+                          onChange={(e) => setExamDate(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-purple-200 rounded-xl font-medium text-slate-700 text-xs text-center"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Student Mark Rows */}
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    <div className="flex justify-between items-center text-slate-400 font-bold px-1 text-[10px] uppercase">
+                      <span>Enrolled Student</span>
+                      <span>Score / {examTotalMarks} (Grade)</span>
+                    </div>
+
+                    {assignedStudents.map((s) => {
+                      const currentScore = marksInputState[s.id] ?? 0;
+                      const grade = computeGrade(currentScore, examTotalMarks);
+
+                      return (
+                        <div
+                          key={s.id}
+                          className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-100 hover:border-slate-200 transition"
+                        >
+                          <div>
+                            <span className="font-bold text-slate-800 text-xs block">{s.name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{s.phone}</span>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="0"
+                              max={examTotalMarks}
+                              value={marksInputState[s.id] ?? ''}
+                              onChange={(e) =>
+                                setMarksInputState({
+                                  ...marksInputState,
+                                  [s.id]: Number(e.target.value),
+                                })
+                              }
+                              className="w-16 p-1.5 text-center font-bold border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-purple-500 text-xs"
+                            />
+                            <span
+                              className={`w-7 h-7 rounded-lg text-[10px] font-bold flex items-center justify-center shrink-0 ${
+                                grade === 'A+' || grade === 'A'
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : grade === 'B+' || grade === 'B'
+                                  ? 'bg-blue-100 text-blue-700'
+                                  : 'bg-amber-100 text-amber-700'
+                              }`}
+                            >
+                              {grade}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
                   <button
-                    onClick={() => {
-                      alert('Marks updated and visible to parents!');
-                      setActiveModal(null);
-                    }}
-                    className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold shadow-md mt-2"
+                    type="button"
+                    disabled={isPublishingMarks || assignedStudents.length === 0}
+                    onClick={handlePublishExamMarks}
+                    className="w-full py-3 bg-purple-600 hover:bg-purple-700 active:scale-[0.99] disabled:bg-slate-300 text-white rounded-xl font-bold shadow-md flex items-center justify-center gap-2 transition text-xs"
                   >
-                    Publish Report Cards
+                    {isPublishingMarks ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Publishing & Computing Ranks...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Award className="w-4 h-4" />
+                        <span>Publish & Broadcast Report Cards</span>
+                      </>
+                    )}
                   </button>
                 </div>
               )}
 
-              {/* 5. FEES NUDGE */}
+              {/* 6. FEES NUDGE */}
               {activeModal === 'fees' && (
                 <div className="space-y-3 text-xs">
                   <p className="text-slate-500">
@@ -784,12 +1249,20 @@ export const TeacherDashboard: React.FC = () => {
                           <p className="font-bold text-slate-800">{s.name}</p>
                           <p className="text-[10px] text-rose-600 font-semibold">Fee Overdue: ₹12,000</p>
                         </div>
-                        <button
-                          onClick={() => alert(`WhatsApp reminder sent for ${s.name}!`)}
-                          className="bg-rose-600 text-white font-bold px-2.5 py-1 rounded-lg text-[10px] shadow"
-                        >
-                          Send Nudge
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleToggleStudentFee(s.id, s.fee_status)}
+                            className="bg-emerald-600 text-white font-bold px-2 py-1 rounded-lg text-[10px] shadow-xs"
+                          >
+                            Mark Paid
+                          </button>
+                          <button
+                            onClick={() => alert(`WhatsApp reminder sent for ${s.name}!`)}
+                            className="bg-rose-600 text-white font-bold px-2.5 py-1 rounded-lg text-[10px] shadow-xs"
+                          >
+                            Nudge
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
