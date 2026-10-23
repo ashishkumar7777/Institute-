@@ -7,6 +7,7 @@ import { LoginPage } from './pages/auth/LoginPage';
 import { StudentDashboard } from './pages/student/StudentDashboard';
 import { TeacherDashboard } from './pages/teacher/TeacherDashboard';
 import { OwnerDashboard } from './pages/owner/OwnerDashboard';
+import { ProtectedRoute } from './components/common/ProtectedRoute';
 
 const RoleBasedRedirect: React.FC = () => {
   const { currentUser, loading } = useAuth();
@@ -35,11 +36,43 @@ export default function App() {
         <LibraryProvider>
           <NoticeProvider>
             <Routes>
+              {/* Root redirect handles automatic routing based on active session */}
               <Route path="/" element={<RoleBasedRedirect />} />
+
+              {/* Public route */}
               <Route path="/login" element={<LoginPage />} />
-              <Route path="/owner" element={<OwnerDashboard />} />
-              <Route path="/teacher" element={<TeacherDashboard />} />
-              <Route path="/student" element={<StudentDashboard />} />
+
+              {/* Protected Owner/Director portal */}
+              <Route
+                path="/owner"
+                element={
+                  <ProtectedRoute allowedRoles={['owner']}>
+                    <OwnerDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Protected Teacher portal */}
+              <Route
+                path="/teacher"
+                element={
+                  <ProtectedRoute allowedRoles={['teacher']}>
+                    <TeacherDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Protected Student portal */}
+              <Route
+                path="/student"
+                element={
+                  <ProtectedRoute allowedRoles={['student']}>
+                    <StudentDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Fallback route */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </NoticeProvider>

@@ -23,9 +23,7 @@ import {
   Lock,
   Eye,
   FileText,
-  Loader2,
-  Trophy,
-  Medal
+  Loader2
 } from 'lucide-react';
 
 type ActiveModal = 'profile' | 'attendance' | 'assignment' | 'fees' | 'results' | 'library' | null;
@@ -50,7 +48,6 @@ interface TestResultItem {
   test_date: string;
 }
 
-// Helper: Returns podium badge styling and label based on performance percentage
 const getPerformanceBadge = (obtained: number, total: number) => {
   if (total <= 0) return null;
   const pct = Math.round((obtained / total) * 100);
@@ -85,8 +82,30 @@ const getPerformanceBadge = (obtained: number, total: number) => {
     };
   }
 
-  // Under 70%: standard display (no badge)
   return null;
+};
+
+// Computes micro-trend relative to chronologically preceding test in same subject
+const computeScoreTrend = (
+  currentIndex: number,
+  allResults: TestResultItem[]
+): { label: string; type: 'up' | 'down' | 'same' | 'first'; diff: number } => {
+  const current = allResults[currentIndex];
+  if (!current || current.total_marks <= 0) return { label: 'First Test', type: 'first', diff: 0 };
+
+  const currentPct = (current.marks_obtained / current.total_marks) * 100;
+  const previous = allResults.slice(currentIndex + 1).find((r) => r.subject === current.subject);
+
+  if (!previous || previous.total_marks <= 0) {
+    return { label: 'Baseline', type: 'first', diff: 0 };
+  }
+
+  const prevPct = (previous.marks_obtained / previous.total_marks) * 100;
+  const diff = Math.round(currentPct - prevPct);
+
+  if (diff > 0) return { label: `+${diff}%`, type: 'up', diff };
+  if (diff < 0) return { label: `${diff}%`, type: 'down', diff };
+  return { label: '0%', type: 'same', diff: 0 };
 };
 
 export const StudentDashboard: React.FC = () => {
@@ -97,7 +116,6 @@ export const StudentDashboard: React.FC = () => {
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
   const [activeReadingChapter, setActiveReadingChapter] = useState<any | null>(null);
 
-  // Read enrolled subjects from live Supabase profile or fallback
   const enrolledSubjects: string[] = 
     (currentUser as any)?.enrolled_subjects?.length > 0
       ? (currentUser as any).enrolled_subjects
@@ -109,26 +127,22 @@ export const StudentDashboard: React.FC = () => {
   const [dbMaterials, setDbMaterials] = useState<MaterialItem[]>([]);
   const [isLoadingMaterials, setIsLoadingMaterials] = useState<boolean>(false);
 
-  // Live Test Results State
   const [liveTestResults, setLiveTestResults] = useState<TestResultItem[]>([]);
   const [isLoadingResults, setIsLoadingResults] = useState<boolean>(false);
 
   const studentName = currentUser?.name || 'Aarav Patel';
   const studentPhone = currentUser?.phone || '9900011101';
   
-  // Reconcile live Supabase fee_status ('PAID' / 'UNPAID')
   const liveFeeStatus = (currentUser as any)?.fee_status || (currentUser as any)?.feeStatus || 'UNPAID';
   const isPaid = liveFeeStatus === 'PAID';
   const attendanceRate = (currentUser as any)?.attendance_rate ?? (currentUser as any)?.attendanceRate ?? 100;
 
-  // Sync selected subject if enrolled subjects change
   useEffect(() => {
     if (enrolledSubjects.length > 0 && !enrolledSubjects.includes(selectedSubject)) {
       setSelectedSubject(enrolledSubjects[0]);
     }
   }, [enrolledSubjects]);
 
-  // Fetch live materials uploaded by teachers from Supabase for the chosen subject
   useEffect(() => {
     const fetchSubjectMaterials = async () => {
       if (!selectedSubject) return;
@@ -157,7 +171,6 @@ export const StudentDashboard: React.FC = () => {
     fetchSubjectMaterials();
   }, [selectedSubject]);
 
-  // Fetch live test results published for this student
   useEffect(() => {
     const fetchStudentTestResults = async () => {
       if (!currentUser?.id) return;
@@ -183,10 +196,8 @@ export const StudentDashboard: React.FC = () => {
     fetchStudentTestResults();
   }, [currentUser?.id]);
 
-  // Combine LibraryContext chapters with live uploaded Supabase materials
   const contextChapters = chapters.filter((c: any) => c.subject === selectedSubject);
 
-  // Normalize all items to a unified list, strictly reading the live is_unlocked status
   const combinedChapters = [
     ...contextChapters.map((c: any) => ({
       id: c.id,
@@ -208,7 +219,6 @@ export const StudentDashboard: React.FC = () => {
     }))
   ];
 
-  // A chapter is only counted as available if the teacher unlocked it AND the student has cleared fees
   const unlockedByTeacher = combinedChapters.filter((c: any) => c.isUnlocked !== false);
   const unlockedChaptersCount = isPaid ? unlockedByTeacher.length : 0;
 
@@ -562,7 +572,7 @@ export const StudentDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 6. RESULTS & PODIUM PERFORMANCE BADGES */}
+              {/* 6. RESULTS & PODIUM PERFORMANCE BADGES WITH DYNAMIC SCORES & TREND */}
               {activeModal === 'results' && (
                 <div className="space-y-3 text-xs">
                   {isLoadingResults ? (
@@ -574,9 +584,10 @@ export const StudentDashboard: React.FC = () => {
                       No test reports published yet.
                     </p>
                   ) : (
-                    liveTestResults.map((res) => {
+                    liveTestResults.map((res, index) => {
                       const badge = getPerformanceBadge(res.marks_obtained, res.total_marks);
                       const percentage = Math.round((res.marks_obtained / res.total_marks) * 100);
+                      const trend = computeScoreTrend(index, liveTestResults);
 
                       return (
                         <div
@@ -587,8 +598,8 @@ export const StudentDashboard: React.FC = () => {
                               : 'bg-slate-50 border-slate-100 hover:border-slate-200'
                           }`}
                         >
-                          {/* Top row: Test Name, Subject, and Special Tier Badge */}
-                          <div className="flex items-center justify-between mb-1.5">
+                          {/* Top row: Test Name, Subject, Trend Pill, and Podium Badge */}
+                          <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="font-bold text-slate-800 text-xs">
                                 {res.test_name}
@@ -596,9 +607,31 @@ export const StudentDashboard: React.FC = () => {
                               <span className="text-[9px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-md font-bold uppercase">
                                 {res.subject}
                               </span>
+
+                              {/* Micro-Trend Indicator */}
+                              {trend.type === 'up' && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 flex items-center gap-0.5">
+                                  ▲ {trend.label}
+                                </span>
+                              )}
+                              {trend.type === 'down' && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 flex items-center gap-0.5">
+                                  ▼ {trend.label}
+                                </span>
+                              )}
+                              {trend.type === 'same' && (
+                                <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600">
+                                  ▬ Stable
+                                </span>
+                              )}
+                              {trend.type === 'first' && (
+                                <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+                                  ● Baseline
+                                </span>
+                              )}
                             </div>
 
-                            {/* Highlighted Podium Badge for 90+, 80+, 70+ */}
+                            {/* Podium Badge */}
                             {badge && (
                               <span
                                 className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${badge.badgeStyle}`}
@@ -609,8 +642,26 @@ export const StudentDashboard: React.FC = () => {
                             )}
                           </div>
 
-                          {/* Bottom row: Date & Batch Rank on left, Clean Score on right */}
-                          <div className="flex items-end justify-between mt-2 pt-2 border-t border-slate-100/80">
+                          {/* Middle row: Progress Track */}
+                          <div className="w-full bg-slate-200/80 h-1.5 rounded-full overflow-hidden my-2">
+                            <div
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                percentage >= 90
+                                  ? 'bg-amber-500'
+                                  : percentage >= 80
+                                  ? 'bg-slate-500'
+                                  : percentage >= 70
+                                  ? 'bg-amber-700'
+                                  : percentage >= 50
+                                  ? 'bg-blue-500'
+                                  : 'bg-rose-500'
+                              }`}
+                              style={{ width: `${Math.min(100, percentage)}%` }}
+                            />
+                          </div>
+
+                          {/* Bottom row: Date & Batch Rank on left, Exact Number Score on right */}
+                          <div className="flex items-end justify-between mt-1 pt-1.5 border-t border-slate-100/80">
                             <div>
                               <span className="text-[10px] text-slate-400 font-medium block">
                                 {new Date(res.test_date).toLocaleDateString('en-GB', {
@@ -639,7 +690,6 @@ export const StudentDashboard: React.FC = () => {
                                 </span>
                               </div>
 
-                              {/* Grade Pill */}
                               <span
                                 className={`w-7 h-7 rounded-xl font-bold flex items-center justify-center text-xs shrink-0 ${
                                   percentage >= 90
@@ -668,7 +718,7 @@ export const StudentDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Protected PDF Reader Modal with Anti-Leak Shield & Watermark */}
+        {/* Protected PDF Reader Modal */}
         {activeReadingChapter && (
           <PdfReaderModal
             chapter={activeReadingChapter}

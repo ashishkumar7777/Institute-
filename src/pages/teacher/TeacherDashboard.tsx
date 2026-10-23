@@ -27,7 +27,9 @@ import {
   XCircle,
   UserCheck,
   Calendar as CalendarIcon,
-  Send
+  TrendingUp,
+  TrendingDown,
+  Minus
 } from 'lucide-react';
 
 interface StudentProfile {
@@ -39,9 +41,20 @@ interface StudentProfile {
   enrolled_subjects: string[];
 }
 
+interface TestResultRow {
+  id: string;
+  test_name: string;
+  subject: string;
+  total_marks: number;
+  marks_obtained: number;
+  grade: string;
+  rank_in_batch: number;
+  test_date: string;
+  student_id: string;
+}
+
 type TeacherModal = 'attendance' | 'notes' | 'marks' | 'assignments' | 'fees' | 'syllabus' | 'students' | null;
 
-// Helper: Formats any Google Drive sharing/view link into an embeddable, view-only /preview URL
 const formatGoogleDrivePreviewUrl = (url: string): string => {
   const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
   if (match && match[1]) {
@@ -50,7 +63,6 @@ const formatGoogleDrivePreviewUrl = (url: string): string => {
   return url.trim();
 };
 
-// Helper: Computes Grade based on percentage
 const computeGrade = (obtained: number, total: number): string => {
   if (total <= 0) return 'F';
   const pct = (obtained / total) * 100;
@@ -73,7 +85,6 @@ export const TeacherDashboard: React.FC = () => {
   const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(true);
   const [isSavingAttendance, setIsSavingAttendance] = useState<boolean>(false);
 
-  // Read teacher name and assigned subject
   const teacherName = currentUser?.name || 'Prof. Rajesh Sharma';
   const teacherSubject =
     ((currentUser as any)?.enrolled_subjects && (currentUser as any).enrolled_subjects[0]) ||
@@ -85,7 +96,7 @@ export const TeacherDashboard: React.FC = () => {
   const [isLoadingMaterials, setIsLoadingMaterials] = useState<boolean>(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
-  // Editing & Deleting states for notes
+  // Notes Edit & Delete state
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [deletingMaterialId, setDeletingMaterialId] = useState<string | null>(null);
 
@@ -94,6 +105,14 @@ export const TeacherDashboard: React.FC = () => {
   const [studentAttendanceHistory, setStudentAttendanceHistory] = useState<Record<string, string>>({});
   const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
 
+  // Selected student for detailed exam history inspection
+  const [selectedStudentForReport, setSelectedStudentForReport] = useState<StudentProfile | null>(null);
+  const [studentExamHistory, setStudentExamHistory] = useState<TestResultRow[]>([]);
+  const [isLoadingExams, setIsLoadingExams] = useState<boolean>(false);
+
+  // Student ID -> Micro Trend Cache: { [studentId]: { label: '+8%', type: 'up' } }
+  const [studentsTrendMap, setStudentsTrendMap] = useState<Record<string, { label: string; type: 'up' | 'down' | 'same' | 'first' }>>({});
+
   // Dynamic Exam States
   const [examName, setExamName] = useState<string>('Unit Test 1');
   const [examTotalMarks, setExamTotalMarks] = useState<number>(100);
@@ -101,7 +120,6 @@ export const TeacherDashboard: React.FC = () => {
   const [marksInputState, setMarksInputState] = useState<Record<string, number>>({});
   const [isPublishingMarks, setIsPublishingMarks] = useState<boolean>(false);
 
-  // Fetch live materials uploaded to Supabase for this subject
   const fetchLiveMaterials = async () => {
     setIsLoadingMaterials(true);
     try {
@@ -150,7 +168,6 @@ export const TeacherDashboard: React.FC = () => {
 
   const unlockedCount = allTeacherChapters.filter((c) => c.isUnlocked).length;
 
-  // Toggle lock/unlock handler for both static context items and Supabase rows
   const handleToggleChapterLock = async (chap: any) => {
     const newStatus = !chap.isUnlocked;
 
@@ -182,18 +199,16 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Form states for uploading / editing Google Drive Notes
   const [chapterTitle, setChapterTitle] = useState('');
   const [rawDriveUrl, setRawDriveUrl] = useState('');
   const [pageCount, setPageCount] = useState('12 Pages');
   const [isPublishingNote, setIsPublishingNote] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
 
-  // Attendance state: { [studentId]: 'PRESENT' | 'ABSENT' }
   const [attendanceState, setAttendanceState] = useState<Record<string, 'PRESENT' | 'ABSENT'>>({});
   const [uploadedNotesCount, setUploadedNotesCount] = useState(4);
 
-  // Fetch live students enrolled in this teacher's subject
+  // Fetch live students & calculate micro-trends
   const fetchStudents = async () => {
     setIsLoadingStudents(true);
     try {
@@ -214,7 +229,6 @@ export const TeacherDashboard: React.FC = () => {
 
       setAssignedStudents(students);
 
-      // Default attendance to PRESENT for today
       const initialAttendance: Record<string, 'PRESENT' | 'ABSENT'> = {};
       const initialMarks: Record<string, number> = {};
       students.forEach((s) => {
@@ -223,6 +237,33 @@ export const TeacherDashboard: React.FC = () => {
       });
       setAttendanceState(initialAttendance);
       setMarksInputState(initialMarks);
+
+      // Fetch all past test results for this subject to compute micro trends
+      const { data: testRows } = await supabase
+        .from('test_results')
+        .select('*')
+        .eq('subject', teacherSubject)
+        .order('test_date', { ascending: false });
+
+      if (testRows) {
+        const trendMap: Record<string, { label: string; type: 'up' | 'down' | 'same' | 'first' }> = {};
+        students.forEach((s) => {
+          const studentTests = testRows.filter((r) => r.student_id === s.id);
+          if (studentTests.length === 0) {
+            trendMap[s.id] = { label: 'New', type: 'first' };
+          } else if (studentTests.length === 1) {
+            trendMap[s.id] = { label: 'Baseline', type: 'first' };
+          } else {
+            const latestPct = (studentTests[0].marks_obtained / studentTests[0].total_marks) * 100;
+            const prevPct = (studentTests[1].marks_obtained / studentTests[1].total_marks) * 100;
+            const diff = Math.round(latestPct - prevPct);
+            if (diff > 0) trendMap[s.id] = { label: `+${diff}%`, type: 'up' };
+            else if (diff < 0) trendMap[s.id] = { label: `${diff}%`, type: 'down' };
+            else trendMap[s.id] = { label: '0%', type: 'same' };
+          }
+        });
+        setStudentsTrendMap(trendMap);
+      }
     } catch (err: any) {
       console.error('Error fetching students:', err.message);
     } finally {
@@ -234,7 +275,6 @@ export const TeacherDashboard: React.FC = () => {
     fetchStudents();
   }, [teacherSubject]);
 
-  // Sync marks input defaults when total marks change
   useEffect(() => {
     if (assignedStudents.length > 0) {
       setMarksInputState((prev) => {
@@ -249,7 +289,6 @@ export const TeacherDashboard: React.FC = () => {
     }
   }, [examTotalMarks, assignedStudents]);
 
-  // Toggle Fee Status (PAID / UNPAID) for a student directly from teacher panel
   const handleToggleStudentFee = async (studentId: string, currentStatus: string) => {
     const nextStatus = currentStatus === 'PAID' ? 'UNPAID' : 'PAID';
 
@@ -271,7 +310,6 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Fetch student's attendance history for calendar display
   const loadStudentAttendanceCalendar = async (student: StudentProfile) => {
     setSelectedStudentForCalendar(student);
     setIsLoadingHistory(true);
@@ -296,6 +334,27 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
+  // Load individual student's complete test performance report
+  const loadStudentPerformanceReport = async (student: StudentProfile) => {
+    setSelectedStudentForReport(student);
+    setIsLoadingExams(true);
+    try {
+      const { data, error } = await supabase
+        .from('test_results')
+        .select('*')
+        .eq('student_id', student.id)
+        .eq('subject', teacherSubject)
+        .order('test_date', { ascending: false });
+
+      if (error) throw error;
+      setStudentExamHistory(data || []);
+    } catch (err: any) {
+      console.error('Failed to load exam history:', err.message);
+    } finally {
+      setIsLoadingExams(false);
+    }
+  };
+
   const toggleAttendance = (id: string) => {
     setAttendanceState((prev) => ({
       ...prev,
@@ -311,7 +370,6 @@ export const TeacherDashboard: React.FC = () => {
     setAttendanceState(updated);
   };
 
-  // Submit attendance to Supabase
   const handleSaveAttendance = async () => {
     if (assignedStudents.length === 0) return;
     setIsSavingAttendance(true);
@@ -344,7 +402,6 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Publish dynamic test marks and calculate ranks
   const handlePublishExamMarks = async () => {
     if (assignedStudents.length === 0) {
       alert('No students enrolled to grade.');
@@ -362,14 +419,12 @@ export const TeacherDashboard: React.FC = () => {
     setIsPublishingMarks(true);
 
     try {
-      // 1. Sort students by marks descending to compute rank
       const sortedStudents = [...assignedStudents].sort((a, b) => {
         const scoreA = marksInputState[a.id] ?? 0;
         const scoreB = marksInputState[b.id] ?? 0;
         return scoreB - scoreA;
       });
 
-      // 2. Prepare payload with calculated ranks and letter grades
       const payload = sortedStudents.map((student, index) => {
         const obtained = Math.min(examTotalMarks, Math.max(0, Number(marksInputState[student.id]) || 0));
         return {
@@ -388,8 +443,9 @@ export const TeacherDashboard: React.FC = () => {
       const { error } = await supabase.from('test_results').insert(payload);
       if (error) throw error;
 
-      alert(`Marks for "${examName}" published successfully! Report cards and batch ranks are now live for students.`);
+      alert(`Marks for "${examName}" published successfully! Report cards and batch ranks are now live.`);
       setActiveModal(null);
+      await fetchStudents();
     } catch (err: any) {
       console.error('Failed to publish marks:', err.message);
       alert('Error publishing marks: ' + err.message);
@@ -398,7 +454,6 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  // Note Edit Handlers
   const handleStartEditMaterial = (chap: any) => {
     setEditingMaterialId(chap.id);
     setChapterTitle(chap.title);
@@ -522,11 +577,15 @@ export const TeacherDashboard: React.FC = () => {
     {
       id: 'students',
       title: 'Student Profiles',
-      subtitle: `${assignedStudents.length} Enrolled • Track Fees`,
+      subtitle: `${assignedStudents.length} Enrolled • Track Performance`,
       icon: UserCheck,
       iconBg: 'bg-teal-100 text-teal-600',
       cardBg: 'bg-teal-50/60 border-teal-100',
-      action: () => setActiveModal('students'),
+      action: () => {
+        setSelectedStudentForCalendar(null);
+        setSelectedStudentForReport(null);
+        setActiveModal('students');
+      },
     },
     {
       id: 'notes',
@@ -662,33 +721,55 @@ export const TeacherDashboard: React.FC = () => {
               <p className="text-xs text-slate-400 text-center py-4 bg-slate-50 rounded-xl">No students enrolled yet.</p>
             ) : (
               <div className="space-y-2">
-                {assignedStudents.map((student) => (
-                  <div
-                    key={student.id}
-                    className="p-2.5 rounded-xl border border-slate-100 bg-slate-50/70 flex items-center justify-between text-xs"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-7 h-7 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-[11px]">
-                        {student.name.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-800">{student.name}</p>
-                        <p className="text-[10px] text-slate-400">Attendance: {student.attendance_rate ?? 100}%</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleToggleStudentFee(student.id, student.fee_status)}
-                      title="Tap to toggle fee status"
-                      className={`text-[10px] px-2 py-0.5 rounded font-bold transition active:scale-95 ${
-                        student.fee_status === 'PAID'
-                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                          : 'bg-rose-100 text-rose-700 hover:bg-rose-200'
-                      }`}
+                {assignedStudents.map((student) => {
+                  const trend = studentsTrendMap[student.id];
+                  return (
+                    <div
+                      key={student.id}
+                      className="p-2.5 rounded-xl border border-slate-100 bg-slate-50/70 flex items-center justify-between text-xs"
                     >
-                      {student.fee_status}
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-[11px]">
+                          {student.name.charAt(0)}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1">
+                            <p className="font-bold text-slate-800">{student.name}</p>
+                            {trend && (
+                              <span
+                                className={`text-[9px] font-bold px-1 py-0.2 rounded flex items-center gap-0.5 ${
+                                  trend.type === 'up'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : trend.type === 'down'
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                {trend.type === 'up' && '▲'}
+                                {trend.type === 'down' && '▼'}
+                                {trend.type === 'same' && '▬'}
+                                {trend.label}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-400">Attendance: {student.attendance_rate ?? 100}%</p>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleToggleStudentFee(student.id, student.fee_status)}
+                        title="Tap to toggle fee status"
+                        className={`text-[10px] px-2 py-0.5 rounded font-bold transition active:scale-95 ${
+                          student.fee_status === 'PAID'
+                            ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                            : 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+                        }`}
+                      >
+                        {student.fee_status}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -740,6 +821,7 @@ export const TeacherDashboard: React.FC = () => {
                   onClick={() => {
                     handleCancelEditMaterial();
                     setSelectedStudentForCalendar(null);
+                    setSelectedStudentForReport(null);
                     setActiveModal(null);
                   }}
                   className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200"
@@ -903,10 +985,98 @@ export const TeacherDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 3. STUDENT DIRECTORY, ATTENDANCE CALENDAR & LIVE FEE TOGGLE */}
+              {/* 3. STUDENT DIRECTORY WITH MICRO-TREND & EXAM PERFORMANCE INSPECTION */}
               {activeModal === 'students' && (
                 <div className="space-y-4 text-xs">
-                  {selectedStudentForCalendar ? (
+                  {/* VIEW A: Individual Student Exam Performance History */}
+                  {selectedStudentForReport ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between p-3 bg-purple-50 rounded-2xl border border-purple-100">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-purple-900 text-sm">{selectedStudentForReport.name}</span>
+                            {studentsTrendMap[selectedStudentForReport.id] && (
+                              <span
+                                className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                  studentsTrendMap[selectedStudentForReport.id].type === 'up'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : studentsTrendMap[selectedStudentForReport.id].type === 'down'
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                {studentsTrendMap[selectedStudentForReport.id].label}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-purple-700 mt-0.5">Performance Report • {teacherSubject}</p>
+                        </div>
+                        <button
+                          onClick={() => setSelectedStudentForReport(null)}
+                          className="px-2.5 py-1.5 bg-purple-200 hover:bg-purple-300 text-purple-900 font-bold rounded-xl text-[10px] transition"
+                        >
+                          ← Back to All
+                        </button>
+                      </div>
+
+                      {isLoadingExams ? (
+                        <div className="flex justify-center py-8 text-slate-400">
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        </div>
+                      ) : studentExamHistory.length === 0 ? (
+                        <p className="text-center text-slate-400 py-6 text-xs bg-slate-50 rounded-2xl">
+                          No test scores recorded yet for {selectedStudentForReport.name}.
+                        </p>
+                      ) : (
+                        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                          {studentExamHistory.map((test) => {
+                            const pct = Math.round((test.marks_obtained / test.total_marks) * 100);
+                            return (
+                              <div
+                                key={test.id}
+                                className="p-3 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between"
+                              >
+                                <div>
+                                  <span className="font-bold text-slate-800 text-xs block">{test.test_name}</span>
+                                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                                    {new Date(test.test_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-2.5 text-right">
+                                  <div>
+                                    <span className="font-extrabold text-slate-800 text-xs block">
+                                      {test.marks_obtained} / {test.total_marks}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-slate-500 block">
+                                      {pct}% • Rank #{test.rank_in_batch}
+                                    </span>
+                                  </div>
+
+                                  <span
+                                    className={`w-7 h-7 rounded-lg text-[10px] font-bold flex items-center justify-center shrink-0 ${
+                                      pct >= 90
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : pct >= 80
+                                        ? 'bg-slate-200 text-slate-800'
+                                        : pct >= 70
+                                        ? 'bg-amber-50 text-amber-900'
+                                        : pct >= 50
+                                        ? 'bg-blue-100 text-blue-700'
+                                        : 'bg-rose-100 text-rose-700'
+                                    }`}
+                                  >
+                                    {test.grade}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : selectedStudentForCalendar ? (
+                    /* VIEW B: Individual Student Attendance Calendar */
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
                         <div>
@@ -970,48 +1140,86 @@ export const TeacherDashboard: React.FC = () => {
                       )}
                     </div>
                   ) : (
+                    /* VIEW C: Full Directory with Trend Pill & Quick Actions */
                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                       <div className="p-2.5 bg-teal-50 border border-teal-100 rounded-xl text-teal-800 text-[11px] flex justify-between items-center">
-                        <span>Tap <strong>PAID / UNPAID</strong> to toggle fee status.</span>
+                        <span>Tap <strong>Report</strong> to view past exams.</span>
                         <span className="font-bold">{assignedStudents.length} Students</span>
                       </div>
 
-                      {assignedStudents.map((s) => (
-                        <div
-                          key={s.id}
-                          className="p-3 bg-slate-50/80 border border-slate-100 rounded-2xl flex items-center justify-between"
-                        >
-                          <div>
-                            <p className="font-bold text-slate-800 text-xs">{s.name}</p>
-                            <p className="text-[10px] text-slate-400 font-mono mt-0.5">{s.phone}</p>
-                          </div>
+                      {assignedStudents.map((s) => {
+                        const trend = studentsTrendMap[s.id];
+                        return (
+                          <div
+                            key={s.id}
+                            className="p-3 bg-slate-50/80 border border-slate-100 rounded-2xl flex items-center justify-between"
+                          >
+                            <div className="pr-1 flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="font-bold text-slate-800 text-xs">{s.name}</p>
+                                
+                                {/* Micro-Trend Indicator ahead of student's name */}
+                                {trend && (
+                                  <span
+                                    title="Score trend compared to previous test"
+                                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 ${
+                                      trend.type === 'up'
+                                        ? 'bg-emerald-100 text-emerald-700'
+                                        : trend.type === 'down'
+                                        ? 'bg-rose-100 text-rose-700'
+                                        : 'bg-slate-200 text-slate-600'
+                                    }`}
+                                  >
+                                    {trend.type === 'up' && '▲'}
+                                    {trend.type === 'down' && '▼'}
+                                    {trend.type === 'same' && '▬'}
+                                    {trend.label}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-slate-400 font-mono mt-0.5">{s.phone}</p>
+                            </div>
 
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => loadStudentAttendanceCalendar(s)}
-                              title="View Attendance Calendar"
-                              className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold text-[10px] flex items-center gap-1 hover:bg-slate-100 shadow-2xs"
-                            >
-                              <CalendarIcon className="w-3 h-3 text-teal-600" />
-                              <span>{s.attendance_rate ?? 100}%</span>
-                            </button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {/* Performance Report Button */}
+                              <button
+                                type="button"
+                                onClick={() => loadStudentPerformanceReport(s)}
+                                title="View Previous Test Results & Rankings"
+                                className="px-2 py-1.5 rounded-lg bg-purple-50 text-purple-700 font-bold text-[10px] flex items-center gap-1 hover:bg-purple-100 transition shadow-2xs"
+                              >
+                                <Award className="w-3 h-3 text-purple-600" />
+                                <span>Report</span>
+                              </button>
 
-                            <button
-                              type="button"
-                              onClick={() => handleToggleStudentFee(s.id, s.fee_status)}
-                              title="Click to toggle fee paid status"
-                              className={`px-2.5 py-1.5 rounded-lg font-bold text-[10px] transition active:scale-95 shadow-2xs ${
-                                s.fee_status === 'PAID'
-                                  ? 'bg-emerald-100 text-emerald-700 hover:bg-rose-100 hover:text-rose-700'
-                                  : 'bg-rose-100 text-rose-700 hover:bg-emerald-100 hover:text-emerald-700'
-                              }`}
-                            >
-                              {s.fee_status}
-                            </button>
+                              {/* Attendance Calendar Button */}
+                              <button
+                                type="button"
+                                onClick={() => loadStudentAttendanceCalendar(s)}
+                                title="View Attendance Calendar"
+                                className="px-2 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold text-[10px] flex items-center gap-1 hover:bg-slate-100 shadow-2xs"
+                              >
+                                <CalendarIcon className="w-3 h-3 text-teal-600" />
+                                <span>{s.attendance_rate ?? 100}%</span>
+                              </button>
+
+                              {/* Fee Status Toggle */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleStudentFee(s.id, s.fee_status)}
+                                title="Click to toggle fee paid status"
+                                className={`px-2 py-1.5 rounded-lg font-bold text-[10px] transition active:scale-95 shadow-2xs ${
+                                  s.fee_status === 'PAID'
+                                    ? 'bg-emerald-100 text-emerald-700 hover:bg-rose-100 hover:text-rose-700'
+                                    : 'bg-rose-100 text-rose-700 hover:bg-emerald-100 hover:text-emerald-700'
+                                }`}
+                              >
+                                {s.fee_status}
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1117,7 +1325,6 @@ export const TeacherDashboard: React.FC = () => {
               {/* 5. DYNAMIC TEST MARKS ENTRY & AUTOMATED BATCH RANKING */}
               {activeModal === 'marks' && (
                 <div className="space-y-3.5 text-xs">
-                  {/* Test Setup Form Box */}
                   <div className="p-3.5 bg-purple-50/70 border border-purple-100 rounded-2xl space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-purple-900 text-xs">Test Configuration ({teacherSubject})</span>
@@ -1161,7 +1368,6 @@ export const TeacherDashboard: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Student Mark Rows */}
                   <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                     <div className="flex justify-between items-center text-slate-400 font-bold px-1 text-[10px] uppercase">
                       <span>Enrolled Student</span>
