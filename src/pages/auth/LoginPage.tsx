@@ -8,8 +8,8 @@ export const LoginPage: React.FC = () => {
   const { loginWithPhoneAndPin } = useAuth();
   const navigate = useNavigate();
 
-  const [phone, setPhone] = useState('9900000001');
-  const [pin, setPin] = useState('123456');
+  const [phone, setPhone] = useState('');
+  const [pin, setPin] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -90,7 +90,7 @@ export const LoginPage: React.FC = () => {
           </button>
         </form>
 
-        <div className="mt-6 pt-5 border-t border-slate-800 text-center">
+        {/* <div className="mt-6 pt-5 border-t border-slate-800 text-center">
           <p className="text-[11px] text-slate-500 mb-2">Development Direct Switch:</p>
           <div className="flex gap-2">
             <button
@@ -115,7 +115,9 @@ export const LoginPage: React.FC = () => {
               Student
             </button>
           </div>
-        </div>
+        </div> */}
+
+
       </div>
     </div>
   );
