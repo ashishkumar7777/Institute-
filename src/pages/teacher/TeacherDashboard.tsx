@@ -39,6 +39,7 @@ interface StudentProfile {
   fee_status: string;
   attendance_rate: number;
   enrolled_subjects: string[];
+  pending_amount?: number;
 }
 
 interface TestResultRow {
@@ -84,6 +85,7 @@ export const TeacherDashboard: React.FC = () => {
   const [assignedStudents, setAssignedStudents] = useState<StudentProfile[]>([]);
   const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(true);
   const [isSavingAttendance, setIsSavingAttendance] = useState<boolean>(false);
+  const [nudgingStudentId, setNudgingStudentId] = useState<string | null>(null);
 
   const teacherName = currentUser?.name || 'Prof. Rajesh Sharma';
   const teacherSubject =
@@ -310,6 +312,37 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
+  const handleNudgeStudentFee = async (student: StudentProfile) => {
+    if (!student.phone) {
+      alert(`No phone number registered for ${student.name}`);
+      return;
+    }
+
+    setNudgingStudentId(student.id);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-whatsapp', {
+        body: {
+          phone: student.phone,
+          studentName: student.name,
+          subject: teacherSubject,
+          date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }),
+        },
+      });
+
+      if (error) {
+        console.error('WhatsApp nudge failed:', error);
+        alert('Failed to send WhatsApp reminder.');
+      } else {
+        alert(`WhatsApp reminder sent to ${student.name}'s parent!`);
+      }
+    } catch (err: any) {
+      console.error('Nudge error:', err);
+      alert('Failed to invoke WhatsApp service.');
+    } finally {
+      setNudgingStudentId(null);
+    }
+  };
+
   const loadStudentAttendanceCalendar = async (student: StudentProfile) => {
     setSelectedStudentForCalendar(student);
     setIsLoadingHistory(true);
@@ -376,6 +409,11 @@ export const TeacherDashboard: React.FC = () => {
 
     try {
       const today = new Date().toISOString().split('T')[0];
+      const formattedDate = new Date().toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+      });
+
       const records = assignedStudents.map((s) => ({
         institute_id: (currentUser as any)?.institute_id || 'inst_apex_01',
         student_id: s.id,
@@ -391,7 +429,36 @@ export const TeacherDashboard: React.FC = () => {
 
       if (error) throw error;
 
-      alert("Today's attendance saved successfully! Student percentages updated.");
+      // Automated WhatsApp Absent Alerts Trigger
+      const absentStudents = assignedStudents.filter(
+        (s) => attendanceState[s.id] === 'ABSENT' && Boolean(s.phone)
+      );
+
+      absentStudents.forEach((student) => {
+        supabase.functions.invoke('send-whatsapp', {
+          body: {
+            phone: student.phone,
+            studentName: student.name,
+            subject: teacherSubject,
+            date: formattedDate,
+          },
+        }).then(({ data, error: fnError }) => {
+          if (fnError) {
+            console.error(`WhatsApp dispatch failed for ${student.name}:`, fnError);
+          } else {
+            console.log(`Absent alert delivered to ${student.name}'s parent:`, data);
+          }
+        });
+      });
+
+      const absentCount = absentStudents.length;
+      alert(
+        `Today's attendance saved! ${
+          absentCount > 0
+            ? `Dispatched WhatsApp absent alerts to ${absentCount} parent(s).`
+            : 'All enrolled students marked present.'
+        }`
+      );
       setActiveModal(null);
       await fetchStudents();
     } catch (err: any) {
@@ -985,10 +1052,9 @@ export const TeacherDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 3. STUDENT DIRECTORY WITH MICRO-TREND & EXAM PERFORMANCE INSPECTION */}
+              {/* 3. STUDENT DIRECTORY */}
               {activeModal === 'students' && (
                 <div className="space-y-4 text-xs">
-                  {/* VIEW A: Individual Student Exam Performance History */}
                   {selectedStudentForReport ? (
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 bg-purple-50 rounded-2xl border border-purple-100">
@@ -1076,7 +1142,6 @@ export const TeacherDashboard: React.FC = () => {
                       )}
                     </div>
                   ) : selectedStudentForCalendar ? (
-                    /* VIEW B: Individual Student Attendance Calendar */
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
                         <div>
@@ -1140,7 +1205,6 @@ export const TeacherDashboard: React.FC = () => {
                       )}
                     </div>
                   ) : (
-                    /* VIEW C: Full Directory with Trend Pill & Quick Actions */
                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                       <div className="p-2.5 bg-teal-50 border border-teal-100 rounded-xl text-teal-800 text-[11px] flex justify-between items-center">
                         <span>Tap <strong>Report</strong> to view past exams.</span>
@@ -1157,8 +1221,6 @@ export const TeacherDashboard: React.FC = () => {
                             <div className="pr-1 flex-1 min-w-0">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <p className="font-bold text-slate-800 text-xs">{s.name}</p>
-                                
-                                {/* Micro-Trend Indicator ahead of student's name */}
                                 {trend && (
                                   <span
                                     title="Score trend compared to previous test"
@@ -1181,7 +1243,6 @@ export const TeacherDashboard: React.FC = () => {
                             </div>
 
                             <div className="flex items-center gap-1.5 shrink-0">
-                              {/* Performance Report Button */}
                               <button
                                 type="button"
                                 onClick={() => loadStudentPerformanceReport(s)}
@@ -1192,7 +1253,6 @@ export const TeacherDashboard: React.FC = () => {
                                 <span>Report</span>
                               </button>
 
-                              {/* Attendance Calendar Button */}
                               <button
                                 type="button"
                                 onClick={() => loadStudentAttendanceCalendar(s)}
@@ -1203,7 +1263,6 @@ export const TeacherDashboard: React.FC = () => {
                                 <span>{s.attendance_rate ?? 100}%</span>
                               </button>
 
-                              {/* Fee Status Toggle */}
                               <button
                                 type="button"
                                 onClick={() => handleToggleStudentFee(s.id, s.fee_status)}
@@ -1322,7 +1381,7 @@ export const TeacherDashboard: React.FC = () => {
                 </form>
               )}
 
-              {/* 5. DYNAMIC TEST MARKS ENTRY & AUTOMATED BATCH RANKING */}
+              {/* 5. DYNAMIC TEST MARKS ENTRY */}
               {activeModal === 'marks' && (
                 <div className="space-y-3.5 text-xs">
                   <div className="p-3.5 bg-purple-50/70 border border-purple-100 rounded-2xl space-y-2.5">
@@ -1453,19 +1512,25 @@ export const TeacherDashboard: React.FC = () => {
                       <div key={s.id} className="p-3 bg-rose-50 border border-rose-100 rounded-xl flex items-center justify-between">
                         <div>
                           <p className="font-bold text-slate-800">{s.name}</p>
-                          <p className="text-[10px] text-rose-600 font-semibold">Fee Overdue: ₹12,000</p>
+                          <p className="text-[10px] text-rose-600 font-semibold">
+                            Fee Overdue: ₹{s.pending_amount ? s.pending_amount.toLocaleString('en-IN') : '12,000'}
+                          </p>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <button
                             onClick={() => handleToggleStudentFee(s.id, s.fee_status)}
-                            className="bg-emerald-600 text-white font-bold px-2 py-1 rounded-lg text-[10px] shadow-xs"
+                            className="bg-emerald-600 text-white font-bold px-2 py-1 rounded-lg text-[10px] shadow-xs hover:bg-emerald-700"
                           >
                             Mark Paid
                           </button>
                           <button
-                            onClick={() => alert(`WhatsApp reminder sent for ${s.name}!`)}
-                            className="bg-rose-600 text-white font-bold px-2.5 py-1 rounded-lg text-[10px] shadow-xs"
+                            disabled={nudgingStudentId === s.id}
+                            onClick={() => handleNudgeStudentFee(s)}
+                            className="bg-rose-600 hover:bg-rose-700 disabled:bg-rose-400 text-white font-bold px-2.5 py-1 rounded-lg text-[10px] shadow-xs flex items-center gap-1 transition"
                           >
+                            {nudgingStudentId === s.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : null}
                             Nudge
                           </button>
                         </div>

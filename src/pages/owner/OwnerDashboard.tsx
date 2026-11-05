@@ -26,10 +26,14 @@ import {
   Pencil,
   Trash2,
   XCircle,
-  Check
+  Check,
+  Search,
+  Award,
+  CalendarCheck2,
+  BellRing
 } from 'lucide-react';
 
-type OwnerModal = 'fees' | 'teachers' | 'students' | 'notices' | 'branding' | null;
+type OwnerModal = 'fees' | 'teachers' | 'students' | 'notices' | 'branding' | 'directory' | null;
 
 interface StudentProfile {
   id: string;
@@ -39,6 +43,8 @@ interface StudentProfile {
   institute_id?: string;
   enrolled_subjects?: string[];
   fee_status?: 'PAID' | 'UNPAID';
+  monthly_fee?: number;
+  fee_cycle_date?: number;
   attendance_rate?: number;
 }
 
@@ -49,6 +55,22 @@ interface TeacherProfile {
   role: string;
   enrolled_subjects?: string[];
   subject?: string;
+}
+
+interface AttendanceLog {
+  id: string;
+  attendance_date: string;
+  status: 'PRESENT' | 'ABSENT';
+  subject?: string;
+}
+
+interface TestMark {
+  id: string;
+  subject: string;
+  test_title: string;
+  marks_obtained: number;
+  max_marks: number;
+  created_at: string;
 }
 
 const AVAILABLE_STREAMS = ['Mathematics', 'Physics', 'Chemistry', 'Biology'];
@@ -63,13 +85,25 @@ export const OwnerDashboard: React.FC = () => {
   const [students, setStudents] = useState<StudentProfile[]>([]);
   const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isSendingNudges, setIsSendingNudges] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
+
+  // Student 360 Directory States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [directoryStatusFilter, setDirectoryStatusFilter] = useState<'ALL' | 'PAID' | 'UNPAID'>('ALL');
+  const [selectedStudentForDetail, setSelectedStudentForDetail] = useState<StudentProfile | null>(null);
+  const [studentAttendanceLogs, setStudentAttendanceLogs] = useState<AttendanceLog[]>([]);
+  const [studentTestMarks, setStudentTestMarks] = useState<TestMark[]>([]);
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+
+  // Calendar Navigation State
+  const [calendarDate, setCalendarDate] = useState<Date>(new Date(2026, 10, 1));
 
   // Student Editing & Deleting State
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [deletingStudentId, setDeletingStudentId] = useState<string | null>(null);
 
-  // Live Supabase teachers state
+  // Faculty State
   const [teachers, setTeachers] = useState<TeacherProfile[]>([]);
   const [isLoadingTeachers, setIsLoadingTeachers] = useState<boolean>(true);
   const [showAddTeacherModal, setShowAddTeacherModal] = useState<boolean>(false);
@@ -78,8 +112,6 @@ export const OwnerDashboard: React.FC = () => {
   const [newTeacherSubject, setNewTeacherSubject] = useState<string>('Physics');
   const [newTeacherPin, setNewTeacherPin] = useState<string>('123456');
   const [isSubmittingTeacher, setIsSubmittingTeacher] = useState<boolean>(false);
-
-  // Teacher Editing & Deleting State
   const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null);
   const [deletingTeacherId, setDeletingTeacherId] = useState<string | null>(null);
 
@@ -87,14 +119,16 @@ export const OwnerDashboard: React.FC = () => {
   const [noticeTitle, setNoticeTitle] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [noticePriority, setNoticePriority] = useState<'normal' | 'urgent'>('normal');
+  const [sendNoticeWhatsApp, setSendNoticeWhatsApp] = useState<boolean>(false);
 
-  // Student Admission Form Fields (Multiple Stream Selection)
+  // Student Admission Form Fields
   const [newStudentName, setNewStudentName] = useState('');
   const [newStudentPhone, setNewStudentPhone] = useState('');
   const [newStudentPin, setNewStudentPin] = useState('123456');
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>(['Mathematics']);
+  const [customMonthlyFee, setCustomMonthlyFee] = useState<string>('1500');
+  const [admissionFeeStatus, setAdmissionFeeStatus] = useState<'PAID' | 'UNPAID'>('UNPAID');
 
-  // Load students from Supabase profiles
   const loadStudents = async () => {
     setIsLoadingStudents(true);
     try {
@@ -113,7 +147,6 @@ export const OwnerDashboard: React.FC = () => {
     }
   };
 
-  // Load teachers from Supabase profiles
   const loadTeachers = async () => {
     setIsLoadingTeachers(true);
     try {
@@ -137,11 +170,18 @@ export const OwnerDashboard: React.FC = () => {
     loadTeachers();
   }, []);
 
-  // Multi-subject toggle helper
+  const handlePrevMonth = () => {
+    setCalendarDate((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+  };
+
+  const handleNextMonth = () => {
+    setCalendarDate((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+  };
+
   const toggleSubjectSelection = (subj: string) => {
     setSelectedSubjects((prev) => {
       if (prev.includes(subj)) {
-        if (prev.length === 1) return prev; // Keep at least one subject selected
+        if (prev.length === 1) return prev;
         return prev.filter((s) => s !== subj);
       } else {
         return [...prev, subj];
@@ -149,21 +189,25 @@ export const OwnerDashboard: React.FC = () => {
     });
   };
 
-  // Financial calculations
-  const feePerStudent = 12000;
-  const paidStudentsCount = students.filter((s) => s.fee_status === 'PAID').length;
-  const unpaidStudentsCount = students.filter((s) => s.fee_status === 'UNPAID').length;
-  const totalCollected = paidStudentsCount * feePerStudent;
-  const totalExpected = (students.length || 1) * feePerStudent;
-  const collectionPercentage = students.length > 0 ? Math.round((totalCollected / totalExpected) * 100) : 0;
+  // Dynamic Financial Calculations
+  const paidStudents = students.filter((s) => s.fee_status === 'PAID');
+  const unpaidStudents = students.filter((s) => s.fee_status === 'UNPAID');
+  const totalCollected = paidStudents.reduce((acc, curr) => acc + (Number(curr.monthly_fee) || 1500), 0);
+  const totalOverdue = unpaidStudents.reduce((acc, curr) => acc + (Number(curr.monthly_fee) || 1500), 0);
+  const totalExpected = totalCollected + totalOverdue;
+  const collectionPercentage = totalExpected > 0 ? Math.round((totalCollected / totalExpected) * 100) : 0;
 
-  // Toggle fee status
+  // Toggle Single Student Fee Status
   const toggleFeeStatus = async (studentId: string, currentStatus?: 'PAID' | 'UNPAID') => {
     const nextStatus = currentStatus === 'PAID' ? 'UNPAID' : 'PAID';
 
     setStudents((prev) =>
       prev.map((s) => (s.id === studentId ? { ...s, fee_status: nextStatus } : s))
     );
+
+    if (selectedStudentForDetail?.id === studentId) {
+      setSelectedStudentForDetail((prev) => (prev ? { ...prev, fee_status: nextStatus } : null));
+    }
 
     const { error } = await supabase
       .from('profiles')
@@ -176,15 +220,186 @@ export const OwnerDashboard: React.FC = () => {
     }
   };
 
-  // Student Edit / Cancel Handlers
+  // MANUAL TRIGGER 1: Send Template 1 (monthly_fee_alert: 41737) to ALL students
+  const handleManualBroadcastTemplate1 = async () => {
+    const targets = students.filter((s) => Boolean(s.phone));
+    if (targets.length === 0) {
+      alert('No students found with valid mobile numbers.');
+      return;
+    }
+
+    if (!window.confirm(`Trigger Template 1 (Monthly Alert) to ALL ${targets.length} students on WhatsApp?`)) return;
+
+    setIsSendingNudges(true);
+    let sentCount = 0;
+    for (const student of targets) {
+      try {
+        const feeAmount = student.monthly_fee || 1500;
+        const subject = student.enrolled_subjects?.[0] || 'Mathematics';
+
+        const { data, error } = await supabase.functions.invoke('send-whatsapp', {
+          body: {
+            type: 'MONTHLY_BROADCAST',
+            phone: student.phone,
+            studentName: student.name,
+            subject: subject,
+            amount: feeAmount,
+            dueDate: '5th of this month'
+          }
+        });
+        if (!error && (data?.return === true || data?.status_code === 200)) sentCount++;
+      } catch (err) {}
+    }
+
+    setIsSendingNudges(false);
+    alert(`Template 1 Dispatch Report:\n• Successful: ${sentCount}/${targets.length}`);
+  };
+
+  // MANUAL TRIGGER 2: Send Template 2 (fee_overdue_nudge: 41738) to ALL UNPAID students
+  const handleManualBroadcastTemplate2 = async () => {
+    const targets = unpaidStudents.filter((s) => Boolean(s.phone));
+    if (targets.length === 0) {
+      alert('All students are marked PAID. No pending dues to nudge.');
+      return;
+    }
+
+    if (!window.confirm(`Trigger Template 2 (Overdue Nudge) to ${targets.length} UNPAID student(s)?`)) return;
+
+    setIsSendingNudges(true);
+    let sentCount = 0;
+    for (const student of targets) {
+      try {
+        const feeAmount = student.monthly_fee || 1500;
+        const subject = student.enrolled_subjects?.[0] || 'Mathematics';
+
+        const { data, error } = await supabase.functions.invoke('send-whatsapp', {
+          body: {
+            type: 'OVERDUE_NUDGE',
+            phone: student.phone,
+            studentName: student.name,
+            subject: subject,
+            amount: feeAmount
+          }
+        });
+        if (!error && (data?.return === true || data?.status_code === 200)) sentCount++;
+      } catch (err) {}
+    }
+
+    setIsSendingNudges(false);
+    alert(`Template 2 Overdue Report:\n• Sent: ${sentCount}/${targets.length}`);
+  };
+
+  // MANUAL TRIGGER 3: Send Template 2 to an INDIVIDUAL student
+  const handleSingleStudentNudge = async (student: StudentProfile) => {
+    if (!student.phone) {
+      alert('This student does not have a registered mobile number.');
+      return;
+    }
+
+    if (!window.confirm(`Send Template 2 WhatsApp alert directly to ${student.name}?`)) return;
+
+    try {
+      const { data, error } = await supabase.functions.invoke('send-whatsapp', {
+        body: {
+          type: 'OVERDUE_NUDGE',
+          phone: student.phone,
+          studentName: student.name,
+          subject: student.enrolled_subjects?.[0] || 'Mathematics',
+          amount: student.monthly_fee || 1500
+        }
+      });
+
+      if (!error && (data?.return === true || data?.status_code === 200)) {
+        alert(`WhatsApp overdue nudge delivered to ${student.name}!`);
+      } else {
+        alert('Failed to deliver message. Check Fast2SMS logs.');
+      }
+    } catch (err: any) {
+      alert('Error sending nudge: ' + err.message);
+    }
+  };
+
+  // Notice Broadcast Handler (with Template 41741 WhatsApp option)
+  const handleBroadcastNoticeSubmit = async () => {
+    if (!noticeTitle.trim() || !broadcastMessage.trim()) {
+      alert('Please enter headline and details.');
+      return;
+    }
+
+    // 1. App banner broadcast
+    addNotice(noticeTitle, broadcastMessage, noticePriority);
+
+    // 2. WhatsApp broadcast via Template 41741
+    if (sendNoticeWhatsApp) {
+      const targets = students.filter((s) => Boolean(s.phone));
+      let count = 0;
+      for (const s of targets) {
+        try {
+          await supabase.functions.invoke('send-whatsapp', {
+            body: {
+              type: 'ANNOUNCEMENT',
+              phone: s.phone,
+              studentName: s.name,
+              subject: noticeTitle.trim(),
+              message: broadcastMessage.trim()
+            }
+          });
+          count++;
+        } catch (e) {}
+      }
+      alert(`Notice published on app banner & WhatsApp sent to ${count} students!`);
+    } else {
+      alert('Notice published to all client app banners!');
+    }
+
+    setNoticeTitle('');
+    setBroadcastMessage('');
+    setSendNoticeWhatsApp(false);
+    setActiveModal(null);
+  };
+
+  // Open 360 Student Dossier
+  const handleOpenStudentDetail = async (student: StudentProfile) => {
+    setSelectedStudentForDetail(student);
+    setIsLoadingDetails(true);
+    setStudentAttendanceLogs([]);
+    setStudentTestMarks([]);
+
+    try {
+      const { data: attendanceData } = await supabase
+        .from('attendance_records')
+        .select('*')
+        .eq('student_id', student.id)
+        .order('attendance_date', { ascending: false });
+
+      if (attendanceData) {
+        setStudentAttendanceLogs(attendanceData as AttendanceLog[]);
+      }
+
+      const { data: marksData } = await supabase
+        .from('student_marks')
+        .select('*')
+        .eq('student_id', student.id)
+        .order('created_at', { ascending: false });
+
+      if (marksData) {
+        setStudentTestMarks(marksData as TestMark[]);
+      }
+    } catch (err: any) {
+      console.error('Error fetching dossier:', err.message);
+    } finally {
+      setIsLoadingDetails(false);
+    }
+  };
+
+  // Student Edit / Delete Handlers
   const handleStartEditStudent = (student: StudentProfile) => {
     setEditingStudentId(student.id);
     setNewStudentName(student.name);
     setNewStudentPhone(student.phone);
-    const existingStreams = Array.isArray(student.enrolled_subjects) && student.enrolled_subjects.length > 0
-      ? student.enrolled_subjects
-      : ['Mathematics'];
-    setSelectedSubjects(existingStreams);
+    setCustomMonthlyFee(String(student.monthly_fee || 1500));
+    setAdmissionFeeStatus(student.fee_status || 'UNPAID');
+    setSelectedSubjects(student.enrolled_subjects?.length ? student.enrolled_subjects : ['Mathematics']);
     setNewStudentPin('123456');
     setErrorMessage('');
   };
@@ -194,89 +409,96 @@ export const OwnerDashboard: React.FC = () => {
     setNewStudentName('');
     setNewStudentPhone('');
     setNewStudentPin('123456');
+    setCustomMonthlyFee('1500');
+    setAdmissionFeeStatus('UNPAID');
     setSelectedSubjects(['Mathematics']);
     setErrorMessage('');
   };
 
-  // Delete student completely
   const handleDeleteStudent = async (studentId: string, studentName: string) => {
-    const confirmDelete = window.confirm(`Are you sure you want to completely remove "${studentName}"?`);
-    if (!confirmDelete) return;
-
+    if (!window.confirm(`Are you sure you want to completely remove "${studentName}"?`)) return;
     setDeletingStudentId(studentId);
-    setErrorMessage('');
 
     try {
-      const { error } = await supabase.rpc('delete_student_account', {
-        target_student_id: studentId,
-      });
-
-      if (error) throw error;
-
-      setStudents((prev) => prev.filter((s) => s.id !== studentId));
-
-      if (editingStudentId === studentId) {
-        handleCancelEditStudent();
+      const { error } = await supabase.rpc('delete_student_account', { target_student_id: studentId });
+      if (error) {
+        await supabase.from('profiles').delete().eq('id', studentId);
       }
-      alert(`Student "${studentName}" deleted. Mobile number can now be registered again.`);
+      setStudents((prev) => prev.filter((s) => s.id !== studentId));
+      if (editingStudentId === studentId) handleCancelEditStudent();
+      if (selectedStudentForDetail?.id === studentId) setSelectedStudentForDetail(null);
+      alert(`Student "${studentName}" deleted successfully.`);
     } catch (err: any) {
-      console.error('Delete failed:', err.message);
       alert('Failed to delete student: ' + err.message);
     } finally {
       setDeletingStudentId(null);
     }
   };
 
-  // Save or Update Student with Multi-Stream Support
   const handleSaveStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStudentName.trim() || !newStudentPhone.trim()) {
       setErrorMessage('Please fill in Name and Phone Number.');
       return;
     }
-    if (selectedSubjects.length === 0) {
-      setErrorMessage('Please select at least one stream/subject.');
-      return;
-    }
 
+    const assignedFee = Number(customMonthlyFee) || 1500;
     setIsSubmitting(true);
     setErrorMessage('');
 
     try {
       if (editingStudentId) {
-        const { error } = await supabase.rpc('update_student_account', {
-          target_student_id: editingStudentId,
-          new_name: newStudentName.trim(),
-          new_phone: newStudentPhone.trim(),
-          new_subjects: selectedSubjects,
-          new_pin: newStudentPin.trim() || '123456',
-        });
+        const { error } = await supabase
+          .from('profiles')
+          .update({
+            name: newStudentName.trim(),
+            phone: newStudentPhone.replace(/\D/g, '').slice(-10),
+            enrolled_subjects: selectedSubjects,
+            monthly_fee: assignedFee,
+            fee_status: admissionFeeStatus
+          })
+          .eq('id', editingStudentId);
 
         if (error) throw error;
-
         await loadStudents();
         handleCancelEditStudent();
-        alert('Student details, streams, and login PIN updated successfully!');
+        alert('Student details updated successfully!');
       } else {
-        const instituteId = currentUser?.institute_id || 'inst_apex_01';
+        const cleanPhone = newStudentPhone.replace(/\D/g, '').slice(-10);
+        const { error: insertError } = await supabase.from('profiles').insert([
+          {
+            name: newStudentName.trim(),
+            phone: cleanPhone,
+            role: 'student',
+            institute_id: currentUser?.institute_id || 'inst_apex_01',
+            enrolled_subjects: selectedSubjects,
+            monthly_fee: assignedFee,
+            fee_status: admissionFeeStatus,
+            fee_cycle_date: 5
+          }
+        ]);
 
-        const { error } = await supabase.rpc('onboard_student', {
-          p_name: newStudentName.trim(),
-          p_phone: newStudentPhone.trim(),
-          p_pin: newStudentPin.trim() || '123456',
-          p_institute_id: instituteId,
-          p_enrolled_subjects: selectedSubjects,
-          p_fee_status: 'PAID'
-        });
+        if (insertError) {
+          await supabase.rpc('onboard_student', {
+            p_name: newStudentName.trim(),
+            p_phone: cleanPhone,
+            p_pin: newStudentPin.trim() || '123456',
+            p_institute_id: currentUser?.institute_id || 'inst_apex_01',
+            p_enrolled_subjects: selectedSubjects,
+            p_fee_status: admissionFeeStatus
+          });
 
-        if (error) throw error;
+          await supabase.from('profiles').update({ monthly_fee: assignedFee }).eq('phone', cleanPhone);
+        }
 
         await loadStudents();
         setNewStudentName('');
         setNewStudentPhone('');
         setNewStudentPin('123456');
+        setCustomMonthlyFee('1500');
+        setAdmissionFeeStatus('UNPAID');
         setSelectedSubjects(['Mathematics']);
-        alert(`Student enrolled successfully with subjects: ${selectedSubjects.join(', ')}`);
+        alert(`Student enrolled successfully!`);
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'Operation failed');
@@ -285,97 +507,7 @@ export const OwnerDashboard: React.FC = () => {
     }
   };
 
-  // Teacher Edit / Cancel Handlers
-  const handleStartEditTeacher = (teacher: TeacherProfile) => {
-    setEditingTeacherId(teacher.id);
-    setNewTeacherName(teacher.name);
-    setNewTeacherPhone(teacher.phone);
-    const subj = Array.isArray(teacher.enrolled_subjects) && teacher.enrolled_subjects.length > 0
-      ? teacher.enrolled_subjects[0]
-      : teacher.subject || 'Physics';
-    setNewTeacherSubject(subj);
-    setNewTeacherPin('123456');
-    setShowAddTeacherModal(true);
-  };
-
-  const handleCancelEditTeacher = () => {
-    setEditingTeacherId(null);
-    setNewTeacherName('');
-    setNewTeacherPhone('');
-    setNewTeacherPin('123456');
-    setNewTeacherSubject('Physics');
-    setShowAddTeacherModal(false);
-  };
-
-  // Delete Teacher
-  const handleDeleteTeacher = async (teacherId: string, teacherName: string) => {
-    const confirmDelete = window.confirm(`Are you sure you want to remove faculty member "${teacherName}"?`);
-    if (!confirmDelete) return;
-
-    setDeletingTeacherId(teacherId);
-    try {
-      const { error } = await supabase.rpc('delete_teacher_account', {
-        target_teacher_id: teacherId,
-      });
-
-      if (error) throw error;
-
-      setTeachers((prev) => prev.filter((t) => t.id !== teacherId));
-      alert(`Teacher "${teacherName}" removed. Phone number can now be reused.`);
-    } catch (err: any) {
-      console.error('Failed to delete teacher:', err.message);
-      alert('Error deleting teacher: ' + err.message);
-    } finally {
-      setDeletingTeacherId(null);
-    }
-  };
-
-  // Save or Update Teacher
-  const handleSaveTeacher = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTeacherName.trim() || !newTeacherPhone.trim()) {
-      alert('Please fill in Name and Phone.');
-      return;
-    }
-
-    setIsSubmittingTeacher(true);
-    try {
-      if (editingTeacherId) {
-        const { error } = await supabase.rpc('update_teacher_account', {
-          target_teacher_id: editingTeacherId,
-          new_name: newTeacherName.trim(),
-          new_phone: newTeacherPhone.trim(),
-          new_subject: newTeacherSubject.trim(),
-          new_pin: newTeacherPin.trim() || '123456',
-        });
-
-        if (error) throw error;
-
-        alert(`Faculty profile for "${newTeacherName}" updated successfully!`);
-        handleCancelEditTeacher();
-        await loadTeachers();
-      } else {
-        const { error } = await supabase.rpc('onboard_new_teacher', {
-          p_name: newTeacherName.trim(),
-          p_phone: newTeacherPhone.trim(),
-          p_pin: newTeacherPin.trim() || '123456',
-          p_subject: newTeacherSubject.trim(),
-        });
-
-        if (error) throw error;
-
-        alert(`Teacher ${newTeacherName} onboarded successfully! Login PIN: ${newTeacherPin}`);
-        handleCancelEditTeacher();
-        await loadTeachers();
-      }
-    } catch (err: any) {
-      console.error('Failed to save teacher:', err.message);
-      alert('Error saving faculty member: ' + err.message);
-    } finally {
-      setIsSubmittingTeacher(false);
-    }
-  };
-
+  // Quick Cards Array
   const quickCards = [
     {
       id: 'fees',
@@ -422,6 +554,20 @@ export const OwnerDashboard: React.FC = () => {
       cardBg: 'bg-purple-50/60 border-purple-100',
       action: () => setActiveModal('branding'),
     },
+    {
+      id: 'directory',
+      title: 'Student 360° Profile',
+      subtitle: 'Search, Ledger & Tests',
+      icon: Search,
+      iconBg: 'bg-cyan-100 text-cyan-600',
+      cardBg: 'bg-cyan-50/60 border-cyan-100',
+      action: () => {
+        setSelectedStudentForDetail(null);
+        setSearchQuery('');
+        setDirectoryStatusFilter('ALL');
+        setActiveModal('directory');
+      },
+    },
   ];
 
   return (
@@ -460,7 +606,7 @@ export const OwnerDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Revenue Snapshot */}
+          {/* Dynamic Revenue Snapshot */}
           <div className="mt-3 p-3.5 bg-white/10 backdrop-blur rounded-2xl border border-white/15">
             <div className="flex items-center justify-between text-xs mb-1.5">
               <span className="text-purple-200 font-semibold flex items-center gap-1">
@@ -478,8 +624,10 @@ export const OwnerDashboard: React.FC = () => {
               />
             </div>
             <div className="flex justify-between text-[11px] text-purple-200 font-medium">
-              <span>{paidStudentsCount} Paid</span>
-              <span className="text-rose-300 font-bold">{unpaidStudentsCount} Overdue (₹{(unpaidStudentsCount * feePerStudent).toLocaleString()})</span>
+              <span>{paidStudents.length} Paid</span>
+              <span className="text-rose-300 font-bold">
+                {unpaidStudents.length} Overdue (₹{totalOverdue.toLocaleString()})
+              </span>
             </div>
           </div>
         </div>
@@ -487,7 +635,7 @@ export const OwnerDashboard: React.FC = () => {
         {/* Real-time Notice Banner */}
         <NoticeBanner />
 
-        {/* Quick Tools */}
+        {/* Quick Tools 2x3 Grid */}
         <div className="px-5 py-5 flex-1 overflow-y-auto">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-base font-bold text-slate-800 tracking-tight">Executive Control</h2>
@@ -518,16 +666,11 @@ export const OwnerDashboard: React.FC = () => {
             })}
           </div>
 
-          {/* Infrastructure Status */}
           <div className="mt-5 p-4 rounded-2xl bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-100 flex items-start justify-between">
             <div>
               <p className="text-xs font-bold text-purple-900">Subscription & Storage</p>
-              <p className="text-[11px] text-purple-700 mt-0.5">
-                Cloudflare R2: 1.1 GB / 10 GB (₹0 Free Tier)
-              </p>
-              <p className="text-[10px] text-purple-500 mt-1">
-                Multi-Tenant PostgreSQL • RLS Enabled
-              </p>
+              <p className="text-[11px] text-purple-700 mt-0.5">Cloudflare R2: 1.1 GB / 10 GB (₹0 Free Tier)</p>
+              <p className="text-[10px] text-purple-500 mt-1">Multi-Tenant PostgreSQL • RLS Enabled</p>
             </div>
             <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-full">
               Live
@@ -567,7 +710,7 @@ export const OwnerDashboard: React.FC = () => {
         {/* Modals Container */}
         {activeModal && (
           <div className="absolute inset-0 bg-black/50 z-30 flex flex-col justify-end backdrop-blur-sm">
-            <div className="bg-white rounded-t-3xl max-h-[85vh] overflow-y-auto p-5 pb-8 shadow-2xl">
+            <div className="bg-white rounded-t-3xl max-h-[88vh] overflow-y-auto p-5 pb-8 shadow-2xl">
               <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
                 <h3 className="font-bold text-lg text-slate-800 capitalize flex items-center gap-2">
                   {activeModal === 'fees' && 'Student Fee Reconciliation'}
@@ -575,10 +718,12 @@ export const OwnerDashboard: React.FC = () => {
                   {activeModal === 'students' && 'Student Admissions'}
                   {activeModal === 'notices' && 'Institute Broadcast'}
                   {activeModal === 'branding' && 'Custom White-Label Setup'}
+                  {activeModal === 'directory' && (selectedStudentForDetail ? 'Student 360° Profile' : 'Student Directory & Search')}
                 </h3>
                 <button
                   onClick={() => {
                     handleCancelEditStudent();
+                    setSelectedStudentForDetail(null);
                     setActiveModal(null);
                   }}
                   className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-slate-200"
@@ -590,19 +735,50 @@ export const OwnerDashboard: React.FC = () => {
               {/* 1. FEE RECONCILIATION */}
               {activeModal === 'fees' && (
                 <div className="space-y-3">
-                  <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl text-xs">
-                    <div>
-                      <p className="font-bold text-slate-700">{unpaidStudentsCount} Overdue Payments</p>
-                      <p className="text-[10px] text-slate-400">Tap status badge to toggle live status</p>
+                  <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2.5">
+                    <div className="flex justify-between items-center text-xs">
+                      <div>
+                        <p className="font-bold text-slate-800">{unpaidStudents.length} Overdue Students</p>
+                        <p className="text-[10px] text-slate-400">Total Pending: ₹{totalOverdue.toLocaleString()}</p>
+                      </div>
+                      <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
+                        {paidStudents.length} / {students.length} Paid
+                      </span>
                     </div>
-                    <button
-                      onClick={() => alert(`WhatsApp payment links broadcasted to ${unpaidStudentsCount} parents!`)}
-                      className="bg-purple-600 hover:bg-purple-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs shadow-sm flex items-center gap-1"
-                    >
-                      <Send className="w-3 h-3" /> Nudge All
-                    </button>
+
+                    {/* Both Manual Trigger Buttons */}
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-200/60">
+                      <button
+                        type="button"
+                        onClick={handleManualBroadcastTemplate1}
+                        disabled={isSendingNudges || students.length === 0}
+                        className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-bold py-2 px-2 rounded-xl text-[10px] flex items-center justify-center gap-1 shadow-sm transition active:scale-95"
+                      >
+                        {isSendingNudges ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Send className="w-3 h-3" />
+                        )}
+                        <span>Broadcast T1 (All)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleManualBroadcastTemplate2}
+                        disabled={isSendingNudges || unpaidStudents.length === 0}
+                        className="bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white font-bold py-2 px-2 rounded-xl text-[10px] flex items-center justify-center gap-1 shadow-sm transition active:scale-95"
+                      >
+                        {isSendingNudges ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <BellRing className="w-3 h-3" />
+                        )}
+                        <span>Nudge Unpaid (T2)</span>
+                      </button>
+                    </div>
                   </div>
 
+                  {/* Student Ledger List */}
                   <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                     {students.map((s) => (
                       <div
@@ -610,26 +786,43 @@ export const OwnerDashboard: React.FC = () => {
                         className="flex items-center justify-between p-2.5 rounded-xl border border-slate-100 bg-slate-50/70 text-xs"
                       >
                         <div>
-                          <p className="font-bold text-slate-800">{s.name}</p>
-                          <p className="text-[10px] text-slate-400">Phone: {s.phone}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-bold text-slate-800">{s.name}</p>
+                            <span className="text-[10px] font-semibold text-purple-700 bg-purple-50 px-1.5 py-0.2 rounded border border-purple-100">
+                              ₹{(s.monthly_fee || 1500).toLocaleString()}/mo
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 font-mono">Phone: {s.phone}</p>
                         </div>
-                        <button
-                          onClick={() => toggleFeeStatus(s.id, s.fee_status)}
-                          className={`px-2.5 py-1 rounded-lg font-bold text-[10px] transition ${
-                            s.fee_status === 'PAID'
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-rose-100 hover:text-rose-700'
-                              : 'bg-rose-100 text-rose-700 hover:bg-emerald-100 hover:text-emerald-700'
-                          }`}
-                        >
-                          {s.fee_status || 'PAID'}
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          {s.fee_status === 'UNPAID' && (
+                            <button
+                              type="button"
+                              onClick={() => handleSingleStudentNudge(s)}
+                              title="Nudge via WhatsApp"
+                              className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 transition active:scale-95"
+                            >
+                              <Send className="w-3 h-3" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => toggleFeeStatus(s.id, s.fee_status)}
+                            className={`px-2.5 py-1 rounded-lg font-bold text-[10px] transition ${
+                              s.fee_status === 'PAID'
+                                ? 'bg-emerald-100 text-emerald-700 hover:bg-rose-100 hover:text-rose-700'
+                                : 'bg-rose-100 text-rose-700 hover:bg-emerald-100 hover:text-emerald-700'
+                            }`}
+                          >
+                            {s.fee_status || 'UNPAID'}
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* 2. LIVE FACULTY DIRECTORY (WITH EDIT & DELETE) */}
+              {/* 2. FACULTY DIRECTORY */}
               {activeModal === 'teachers' && (
                 <div className="space-y-3 text-xs">
                   <div className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -638,10 +831,7 @@ export const OwnerDashboard: React.FC = () => {
                       <p className="text-[10px] text-slate-400">Live PostgreSQL directory</p>
                     </div>
                     <button
-                      onClick={() => {
-                        handleCancelEditTeacher();
-                        setShowAddTeacherModal(true);
-                      }}
+                      onClick={() => setShowAddTeacherModal(true)}
                       className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shadow-sm"
                     >
                       <Plus className="w-3.5 h-3.5" /> Add Teacher
@@ -652,71 +842,54 @@ export const OwnerDashboard: React.FC = () => {
                     <div className="flex justify-center py-6 text-slate-400">
                       <Loader2 className="w-5 h-5 animate-spin" />
                     </div>
-                  ) : teachers.length === 0 ? (
-                    <p className="text-center text-slate-400 py-6">No faculty found. Click &quot;Add Teacher&quot; above.</p>
                   ) : (
                     <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                      {teachers.map((t) => {
-                        const subjectDisplay =
-                          Array.isArray(t.enrolled_subjects) && t.enrolled_subjects.length > 0
-                            ? t.enrolled_subjects.join(', ')
-                            : t.subject || 'Specialist';
-
-                        return (
-                          <div
-                            key={t.id}
-                            className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between"
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center">
-                                {t.name.charAt(0)}
-                              </div>
-                              <div>
-                                <p className="font-bold text-slate-800">{t.name}</p>
-                                <p className="text-[10px] text-indigo-600 font-medium">{subjectDisplay} Faculty</p>
-                              </div>
+                      {teachers.map((t) => (
+                        <div
+                          key={t.id}
+                          className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center">
+                              {t.name.charAt(0)}
                             </div>
-
-                            <div className="flex items-center gap-2">
-                              <div className="text-right mr-1">
-                                <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded">
-                                  Active
-                                </span>
-                                <p className="text-[9px] text-slate-400 font-mono mt-0.5">{t.phone}</p>
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={() => handleStartEditTeacher(t)}
-                                title="Edit Teacher"
-                                className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition active:scale-95"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </button>
-
-                              <button
-                                type="button"
-                                disabled={deletingTeacherId === t.id}
-                                onClick={() => handleDeleteTeacher(t.id, t.name)}
-                                title="Delete Teacher"
-                                className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition active:scale-95 disabled:opacity-50"
-                              >
-                                {deletingTeacherId === t.id ? (
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                ) : (
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                )}
-                              </button>
+                            <div>
+                              <p className="font-bold text-slate-800">{t.name}</p>
+                              <p className="text-[10px] text-indigo-600 font-medium">
+                                {t.enrolled_subjects?.join(', ') || t.subject || 'Specialist'}
+                              </p>
                             </div>
                           </div>
-                        );
-                      })}
+                          <div className="flex items-center gap-2">
+                            <span className="text-[9px] text-slate-400 font-mono">{t.phone}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingTeacherId(t.id);
+                                setNewTeacherName(t.name);
+                                setNewTeacherPhone(t.phone);
+                                setShowAddTeacherModal(true);
+                              }}
+                              className="p-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteTeacher(t.id, t.name)}
+                              className="p-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* 3. LIVE STUDENT ADMISSIONS (WITH MULTI-STREAM SELECTION) */}
+              {/* 3. STUDENT ADMISSIONS (PRESETS & ENROLLED ROSTER PRESERVED) */}
               {activeModal === 'students' && (
                 <div className="space-y-4 text-xs">
                   <form onSubmit={handleSaveStudent} className="p-3.5 bg-slate-50 rounded-2xl space-y-3 border border-slate-200">
@@ -754,6 +927,7 @@ export const OwnerDashboard: React.FC = () => {
                     <div className="grid grid-cols-2 gap-2">
                       <input
                         type="tel"
+                        maxLength={10}
                         placeholder="Mobile Number"
                         value={newStudentPhone}
                         onChange={(e) => setNewStudentPhone(e.target.value)}
@@ -805,6 +979,74 @@ export const OwnerDashboard: React.FC = () => {
                       </div>
                     </div>
 
+                    {/* MANUAL CUSTOM FEE TEXT INPUT WITH QUICK PRESETS */}
+                    <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-slate-700">Monthly Tuition Fee (Custom)</label>
+                        <span className="text-[10px] text-slate-400">Enter custom amount</span>
+                      </div>
+
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">₹</span>
+                        <input
+                          type="number"
+                          value={customMonthlyFee}
+                          onChange={(e) => setCustomMonthlyFee(e.target.value)}
+                          placeholder="e.g. 1500 or 2500"
+                          className="w-full pl-7 pr-3 py-2 text-xs border border-slate-200 rounded-xl font-semibold text-slate-800 focus:outline-none focus:border-indigo-600 bg-slate-50/50"
+                          required
+                        />
+                      </div>
+
+                      {/* Quick Presets */}
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <span className="text-[10px] text-slate-400">Presets:</span>
+                        {['1200', '1500', '2500', '3500'].map((preset) => (
+                          <button
+                            type="button"
+                            key={preset}
+                            onClick={() => setCustomMonthlyFee(preset)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold border transition ${
+                              customMonthlyFee === preset
+                                ? 'bg-indigo-50 border-indigo-400 text-indigo-700'
+                                : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                            }`}
+                          >
+                            ₹{preset}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Initial Fee Status Selector */}
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-slate-600">Initial Status:</span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setAdmissionFeeStatus('PAID')}
+                            className={`px-3 py-1 text-[10px] font-bold rounded-lg border transition ${
+                              admissionFeeStatus === 'PAID'
+                                ? 'bg-emerald-50 border-emerald-500 text-emerald-700'
+                                : 'bg-white border-slate-200 text-slate-400'
+                            }`}
+                          >
+                            PAID
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAdmissionFeeStatus('UNPAID')}
+                            className={`px-3 py-1 text-[10px] font-bold rounded-lg border transition ${
+                              admissionFeeStatus === 'UNPAID'
+                                ? 'bg-rose-50 border-rose-500 text-rose-700'
+                                : 'bg-white border-slate-200 text-slate-400'
+                            }`}
+                          >
+                            UNPAID
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
                     <button
                       type="submit"
                       disabled={isSubmitting}
@@ -833,7 +1075,7 @@ export const OwnerDashboard: React.FC = () => {
                     </button>
                   </form>
 
-                  {/* Student List */}
+                  {/* Student List with Controls */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <p className="font-bold text-slate-700">Enrolled Students ({students.length})</p>
@@ -847,7 +1089,12 @@ export const OwnerDashboard: React.FC = () => {
                           className="p-2.5 bg-slate-50 rounded-xl flex justify-between items-center text-[11px] border border-slate-100 hover:border-slate-200 transition"
                         >
                           <div>
-                            <span className="font-bold text-slate-800 block text-xs">{s.name}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-slate-800 text-xs">{s.name}</span>
+                              <span className="text-[9px] font-bold text-purple-700 bg-purple-100/70 px-1.5 py-0.2 rounded">
+                                ₹{(s.monthly_fee || 1500).toLocaleString()}/mo
+                              </span>
+                            </div>
                             <div className="flex flex-wrap gap-1 mt-0.5">
                               {Array.isArray(s.enrolled_subjects) && s.enrolled_subjects.length > 0 ? (
                                 s.enrolled_subjects.map((sub) => (
@@ -898,17 +1145,17 @@ export const OwnerDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* 4. BROADCAST NOTICES */}
+              {/* 4. BROADCAST NOTICES (WITH WHATSAPP 41741 DISPATCH) */}
               {activeModal === 'notices' && (
                 <div className="space-y-3 text-xs">
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Notice Headline</label>
+                    <label className="block font-semibold text-slate-700 mb-1">Notice Headline / Topic</label>
                     <input
                       type="text"
                       value={noticeTitle}
                       onChange={(e) => setNoticeTitle(e.target.value)}
-                      placeholder="e.g. Test Series Postponed"
-                      className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-none font-bold"
+                      placeholder="e.g. Diwali Holiday Notice"
+                      className="w-full p-2.5 rounded-xl border border-slate-200 font-bold focus:outline-none"
                     />
                   </div>
 
@@ -918,7 +1165,7 @@ export const OwnerDashboard: React.FC = () => {
                       rows={3}
                       value={broadcastMessage}
                       onChange={(e) => setBroadcastMessage(e.target.value)}
-                      placeholder="Type message for all students and faculty..."
+                      placeholder="Classes suspended from 10th to 15th Nov..."
                       className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-none"
                     />
                   </div>
@@ -944,18 +1191,21 @@ export const OwnerDashboard: React.FC = () => {
                     </button>
                   </div>
 
+                  {/* WhatsApp Checkbox Option */}
+                  <label className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl border border-slate-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={sendNoticeWhatsApp}
+                      onChange={(e) => setSendNoticeWhatsApp(e.target.checked)}
+                      className="rounded text-purple-600 focus:ring-0"
+                    />
+                    <span className="text-[11px] font-semibold text-slate-700">
+                      Also send to all students via WhatsApp (Template 41741)
+                    </span>
+                  </label>
+
                   <button
-                    onClick={() => {
-                      if (!noticeTitle.trim() || !broadcastMessage.trim()) {
-                        alert('Please enter both title and message.');
-                        return;
-                      }
-                      addNotice(noticeTitle, broadcastMessage, noticePriority);
-                      alert('Notice broadcasted to all students and teachers in real time!');
-                      setNoticeTitle('');
-                      setBroadcastMessage('');
-                      setActiveModal(null);
-                    }}
+                    onClick={handleBroadcastNoticeSubmit}
                     className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold shadow-sm"
                   >
                     Broadcast Immediately
@@ -975,23 +1225,12 @@ export const OwnerDashboard: React.FC = () => {
                       className="w-full p-2.5 rounded-xl border border-slate-200 font-bold"
                     />
                   </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Primary Theme Color</label>
-                    <div className="flex gap-2">
-                      <div className="w-8 h-8 rounded-full bg-blue-600 border-2 border-slate-300 cursor-pointer" />
-                      <div className="w-8 h-8 rounded-full bg-emerald-600 border-2 border-slate-300 cursor-pointer" />
-                      <div className="w-8 h-8 rounded-full bg-purple-700 border-2 border-purple-400 cursor-pointer" />
-                    </div>
-                  </div>
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-slate-600 space-y-1">
                     <p>Multi-Tenant Schema: <strong>Isolated RLS</strong></p>
                     <p>Zero Egress Storage: <strong>Cloudflare R2 Ready</strong></p>
                   </div>
                   <button
-                    onClick={() => {
-                      alert('Branding updated across client applications!');
-                      setActiveModal(null);
-                    }}
+                    onClick={() => setActiveModal(null)}
                     className="w-full py-2.5 bg-purple-700 hover:bg-purple-800 text-white rounded-xl font-bold shadow-md"
                   >
                     Save Changes
@@ -999,98 +1238,401 @@ export const OwnerDashboard: React.FC = () => {
                 </div>
               )}
 
-            </div>
-          </div>
-        )}
+              {/* 6. STUDENT 360° DIRECTORY (RESTORED FILTER TABS & METRIC CARDS) */}
+              {activeModal === 'directory' && (
+                <div className="space-y-3 text-xs">
+                  {!selectedStudentForDetail ? (
+                    <>
+                      {/* Search Bar & Filter Tabs */}
+                      <div className="space-y-2">
+                        <div className="relative">
+                          <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                          <input
+                            type="text"
+                            placeholder="Search by student name or mobile..."
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-none focus:border-cyan-500 font-medium"
+                          />
+                        </div>
 
-        {/* Sub-Modal: Add or Edit Teacher Form */}
-        {showAddTeacherModal && (
-          <div className="absolute inset-0 bg-black/60 z-40 flex items-center justify-center p-4 backdrop-blur-xs">
-            <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-2xl border border-slate-100">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-                <div className="flex items-center gap-2">
-                  <UserPlus className="w-5 h-5 text-emerald-600" />
-                  <h4 className="font-bold text-slate-800 text-sm">
-                    {editingTeacherId ? 'Edit Faculty Details' : 'Onboard New Faculty'}
-                  </h4>
-                </div>
-                <button
-                  onClick={handleCancelEditTeacher}
-                  className="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 hover:bg-slate-200"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+                        {/* Filter Tabs */}
+                        <div className="flex gap-1.5">
+                          {(['ALL', 'PAID', 'UNPAID'] as const).map((filter) => (
+                            <button
+                              key={filter}
+                              type="button"
+                              onClick={() => setDirectoryStatusFilter(filter)}
+                              className={`px-3 py-1 rounded-lg text-[10px] font-bold border transition ${
+                                directoryStatusFilter === filter
+                                  ? 'bg-cyan-50 border-cyan-500 text-cyan-700'
+                                  : 'bg-slate-50 border-slate-200 text-slate-500'
+                              }`}
+                            >
+                              {filter === 'ALL' ? 'All Students' : filter}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
 
-              <form onSubmit={handleSaveTeacher} className="space-y-3 text-xs">
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Teacher Full Name</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Dr. H.C. Verma"
-                    value={newTeacherName}
-                    onChange={(e) => setNewTeacherName(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-emerald-500 font-medium"
-                    required
-                  />
-                </div>
+                      {/* Filtered Student List */}
+                      <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1 pt-1">
+                        {students
+                          .filter((s) => {
+                            const q = searchQuery.toLowerCase();
+                            const matchesSearch = s.name.toLowerCase().includes(q) || s.phone.includes(q);
+                            const matchesFilter =
+                              directoryStatusFilter === 'ALL' ? true : s.fee_status === directoryStatusFilter;
+                            return matchesSearch && matchesFilter;
+                          })
+                          .map((s) => (
+                            <div
+                              key={s.id}
+                              onClick={() => handleOpenStudentDetail(s)}
+                              className="p-3 bg-slate-50 hover:bg-cyan-50/50 rounded-xl border border-slate-200 flex items-center justify-between cursor-pointer transition active:scale-[0.99]"
+                            >
+                              <div>
+                                <div className="flex items-center gap-1.5">
+                                  <p className="font-bold text-slate-800 text-xs">{s.name}</p>
+                                  <span
+                                    className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                                      s.fee_status === 'PAID'
+                                        ? 'bg-emerald-100 text-emerald-700'
+                                        : 'bg-rose-100 text-rose-700'
+                                    }`}
+                                  >
+                                    {s.fee_status || 'UNPAID'}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                  {s.phone} • {s.enrolled_subjects?.join(', ') || 'General'}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-bold text-slate-700">
+                                  ₹{(s.monthly_fee || 1500).toLocaleString()}/mo
+                                </span>
+                                <ChevronRight className="w-4 h-4 text-slate-400" />
+                              </div>
+                            </div>
+                          ))}
 
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Mobile Number (Login ID)</label>
-                  <input
-                    type="tel"
-                    maxLength={10}
-                    placeholder="e.g. 9871780002"
-                    value={newTeacherPhone}
-                    onChange={(e) => setNewTeacherPhone(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-emerald-500 font-medium font-mono"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Teaching Subject</label>
-                  <select
-                    value={newTeacherSubject}
-                    onChange={(e) => setNewTeacherSubject(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-emerald-500 font-medium bg-white"
-                  >
-                    <option value="Physics">Physics</option>
-                    <option value="Chemistry">Chemistry</option>
-                    <option value="Mathematics">Mathematics</option>
-                    <option value="Biology">Biology</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-600 font-bold mb-1">Access PIN / Password</label>
-                  <input
-                    type="text"
-                    value={newTeacherPin}
-                    onChange={(e) => setNewTeacherPin(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 focus:outline-emerald-500 font-medium font-mono"
-                    required
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmittingTeacher}
-                  className={`w-full py-3 mt-2 text-white rounded-xl font-bold shadow-md flex items-center justify-center gap-1.5 transition ${
-                    editingTeacherId
-                      ? 'bg-amber-600 hover:bg-amber-700'
-                      : 'bg-emerald-600 hover:bg-emerald-700'
-                  }`}
-                >
-                  {isSubmittingTeacher ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : editingTeacherId ? (
-                    'Update Faculty Account'
+                        {students.filter((s) => {
+                          const q = searchQuery.toLowerCase();
+                          return (
+                            (s.name.toLowerCase().includes(q) || s.phone.includes(q)) &&
+                            (directoryStatusFilter === 'ALL' || s.fee_status === directoryStatusFilter)
+                          );
+                        }).length === 0 && (
+                          <p className="text-center text-slate-400 py-6 text-[11px]">No matching students found.</p>
+                        )}
+                      </div>
+                    </>
                   ) : (
-                    'Confirm & Create Faculty Account'
+                    /* 360° STUDENT DETAIL VIEW */
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedStudentForDetail(null)}
+                          className="text-[11px] font-bold text-cyan-600 hover:text-cyan-700 flex items-center gap-1"
+                        >
+                          ← Back to Directory
+                        </button>
+                        <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">
+                          ID: {selectedStudentForDetail.id.slice(0, 8)}
+                        </span>
+                      </div>
+
+                      {/* Header Bio Card */}
+                      <div className="p-3 bg-gradient-to-r from-slate-900 to-indigo-900 rounded-2xl text-white shadow-md">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h3 className="font-bold text-base">{selectedStudentForDetail.name}</h3>
+                            <p className="text-[11px] text-indigo-200 font-mono">{selectedStudentForDetail.phone}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleFeeStatus(selectedStudentForDetail.id, selectedStudentForDetail.fee_status)
+                            }
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition ${
+                              selectedStudentForDetail.fee_status === 'PAID'
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30 hover:bg-emerald-500/30'
+                                : 'bg-rose-500/20 text-rose-300 border-rose-400/30 hover:bg-rose-500/30'
+                            }`}
+                          >
+                            {selectedStudentForDetail.fee_status || 'UNPAID'} (Tap to toggle)
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-white/10 text-[11px]">
+                          <div>
+                            <span className="text-white/60 block text-[9px] uppercase tracking-wider">
+                              Custom Monthly Fee
+                            </span>
+                            <span className="font-bold text-white text-xs">
+                              ₹{(selectedStudentForDetail.monthly_fee || 1500).toLocaleString()}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-white/60 block text-[9px] uppercase tracking-wider">
+                              Enrolled Streams
+                            </span>
+                            <span className="font-medium text-white truncate block">
+                              {selectedStudentForDetail.enrolled_subjects?.join(', ') || 'All Streams'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {isLoadingDetails ? (
+                        <div className="flex justify-center py-8 text-slate-400">
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        </div>
+                      ) : (
+                        <div className="space-y-4 max-h-[58vh] overflow-y-auto pr-1">
+                          
+                          {/* 1. DAILY ATTENDANCE CALENDAR (EXACT STUDENT PORTAL STYLE) */}
+                          {(() => {
+                            const currentYear = calendarDate.getFullYear();
+                            const currentMonth = calendarDate.getMonth();
+                            const monthName = calendarDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+                            const totalDaysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+                            const firstDayIndex = new Date(currentYear, currentMonth, 1).getDay();
+
+                            const attendanceMap = new Map<string, 'PRESENT' | 'ABSENT'>();
+                            studentAttendanceLogs.forEach((log) => {
+                              if (log.attendance_date) {
+                                attendanceMap.set(log.attendance_date, log.status);
+                              }
+                            });
+
+                            const totalLogs = studentAttendanceLogs.length;
+                            const presentCount = studentAttendanceLogs.filter((l) => l.status === 'PRESENT').length;
+                            const absentCount = studentAttendanceLogs.filter((l) => l.status === 'ABSENT').length;
+                            const overallRate = totalLogs > 0 ? Math.round((presentCount / totalLogs) * 100) : 0;
+
+                            return (
+                              <div className="space-y-3">
+                                {/* Overall Record Scorecard */}
+                                <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-2xl flex items-center justify-between">
+                                  <div>
+                                    <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">
+                                      Overall Record
+                                    </span>
+                                    <span className="text-2xl font-black text-emerald-950 mt-0.5 block">
+                                      {overallRate}%
+                                    </span>
+                                    <p className="text-[10px] text-emerald-700 font-medium mt-0.5">
+                                      {presentCount} Present • {absentCount} Absent ({totalLogs} Total sessions)
+                                    </p>
+                                  </div>
+                                  <div className="w-10 h-10 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-600">
+                                    <Check className="w-6 h-6 stroke-[2.5]" />
+                                  </div>
+                                </div>
+
+                                {/* Calendar Card */}
+                                <div className="p-3.5 bg-white rounded-2xl border border-slate-200 shadow-xs">
+                                  <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
+                                    <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
+                                      <CalendarCheck2 className="w-4 h-4 text-emerald-600" />
+                                      <span>{monthName}</span>
+                                    </div>
+
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={handlePrevMonth}
+                                        className="p-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 active:scale-95"
+                                      >
+                                        <ChevronRight className="w-3.5 h-3.5 rotate-180" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={handleNextMonth}
+                                        className="p-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 active:scale-95"
+                                      >
+                                        <ChevronRight className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Week Days Header */}
+                                  <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 my-2">
+                                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+                                      <span key={d}>{d}</span>
+                                    ))}
+                                  </div>
+
+                                  {/* Day Tiles Matrix */}
+                                  <div className="grid grid-cols-7 gap-1.5">
+                                    {/* Offset blanks */}
+                                    {Array.from({ length: firstDayIndex }).map((_, i) => (
+                                      <div key={`blank-${i}`} className="h-9" />
+                                    ))}
+
+                                    {/* Days in Month */}
+                                    {Array.from({ length: totalDaysInMonth }).map((_, i) => {
+                                      const dayNum = i + 1;
+                                      const formattedMonth = String(currentMonth + 1).padStart(2, '0');
+                                      const formattedDay = String(dayNum).padStart(2, '0');
+                                      const dateStr = `${currentYear}-${formattedMonth}-${formattedDay}`;
+
+                                      const status = attendanceMap.get(dateStr);
+
+                                      return (
+                                        <div
+                                          key={dateStr}
+                                          className={`h-9 rounded-xl flex flex-col items-center justify-center text-xs font-semibold transition ${
+                                            status === 'PRESENT'
+                                              ? 'bg-emerald-50 border border-emerald-400 text-emerald-800'
+                                              : status === 'ABSENT'
+                                              ? 'bg-rose-50 border border-rose-300 text-rose-800'
+                                              : 'bg-slate-50/70 border border-slate-100 text-slate-600'
+                                          }`}
+                                        >
+                                          <span className="text-[11px] leading-none">{dayNum}</span>
+                                          {status && (
+                                            <span
+                                              className={`text-[8px] font-bold mt-0.5 leading-none ${
+                                                status === 'PRESENT' ? 'text-emerald-600' : 'text-rose-600'
+                                              }`}
+                                            >
+                                              {status === 'PRESENT' ? 'P' : 'A'}
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Status Indicator Legend */}
+                                  <div className="flex items-center justify-between pt-2.5 mt-2.5 border-t border-slate-100 text-[10px] font-medium text-slate-500">
+                                    <span className="flex items-center gap-1 text-emerald-700">
+                                      <span className="w-2 h-2 rounded-full bg-emerald-500" /> Present (P)
+                                    </span>
+                                    <span className="flex items-center gap-1 text-rose-700">
+                                      <span className="w-2 h-2 rounded-full bg-rose-500" /> Absent (A)
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* 2. ENHANCED ACADEMIC PERFORMANCE & MARKS */}
+                          {(() => {
+                            const totalTests = studentTestMarks.length;
+                            const totalMarksObtained = studentTestMarks.reduce((acc, curr) => acc + Number(curr.marks_obtained), 0);
+                            const totalMaxMarks = studentTestMarks.reduce((acc, curr) => acc + Number(curr.max_marks || 100), 0);
+                            const overallAvg = totalMaxMarks > 0 ? Math.round((totalMarksObtained / totalMaxMarks) * 100) : 0;
+                            const bestScore = totalTests > 0 
+                              ? Math.max(...studentTestMarks.map((m) => Math.round((m.marks_obtained / (m.max_marks || 100)) * 100))) 
+                              : 0;
+
+                            return (
+                              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+                                <div className="flex justify-between items-center">
+                                  <div>
+                                    <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                                      <Award className="w-4 h-4 text-amber-500" /> Academic Assessments & Tests
+                                    </span>
+                                    <p className="text-[10px] text-slate-400 mt-0.5">Performance tracking</p>
+                                  </div>
+                                  <span
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                      overallAvg >= 75
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                        : overallAvg >= 50
+                                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                        : 'bg-rose-50 text-rose-700 border-rose-200'
+                                    }`}
+                                  >
+                                    {overallAvg}% Avg
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-3 gap-2">
+                                  <div className="bg-white p-2 rounded-xl border border-slate-100 text-center shadow-xs">
+                                    <span className="text-[8px] text-slate-400 uppercase font-semibold block">Tests Given</span>
+                                    <span className="text-sm font-bold text-slate-800">{totalTests}</span>
+                                  </div>
+                                  <div className="bg-white p-2 rounded-xl border border-slate-100 text-center shadow-xs">
+                                    <span className="text-[8px] text-slate-400 uppercase font-semibold block">Overall Avg</span>
+                                    <span className="text-sm font-bold text-indigo-600">{overallAvg}%</span>
+                                  </div>
+                                  <div className="bg-white p-2 rounded-xl border border-slate-100 text-center shadow-xs">
+                                    <span className="text-[8px] text-slate-400 uppercase font-semibold block">Best Score</span>
+                                    <span className="text-sm font-bold text-emerald-600">{bestScore}%</span>
+                                  </div>
+                                </div>
+
+                                {totalTests === 0 ? (
+                                  <div className="p-4 bg-white rounded-xl border border-slate-100 text-center space-y-1">
+                                    <p className="text-slate-400 text-[11px] font-medium">No test scores recorded yet.</p>
+                                    <p className="text-slate-300 text-[9px]">Add test marks to generate automated performance reports.</p>
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                                    {studentTestMarks.map((mark, idx) => {
+                                      const scorePct = Math.round((mark.marks_obtained / (mark.max_marks || 100)) * 100);
+                                      return (
+                                        <div
+                                          key={idx}
+                                          className="p-2.5 bg-white rounded-xl border border-slate-100 space-y-1.5 shadow-xs"
+                                        >
+                                          <div className="flex justify-between items-start">
+                                            <div>
+                                              <span className="font-bold text-slate-800 text-[11px] block">
+                                                {mark.test_title || 'Weekly Chapter Test'}
+                                              </span>
+                                              <span className="text-[9px] text-indigo-600 font-semibold bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-100">
+                                                {mark.subject}
+                                              </span>
+                                            </div>
+                                            <div className="text-right">
+                                              <span className="font-bold text-xs text-slate-800">
+                                                {mark.marks_obtained} <span className="text-[10px] text-slate-400">/ {mark.max_marks || 100}</span>
+                                              </span>
+                                              <span className={`block text-[9px] font-bold ${
+                                                scorePct >= 75 ? 'text-emerald-600' : scorePct >= 50 ? 'text-amber-600' : 'text-rose-600'
+                                              }`}>
+                                                {scorePct}% Score
+                                              </span>
+                                            </div>
+                                          </div>
+
+                                          <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                                            <div
+                                              className={`h-full rounded-full transition-all duration-500 ${
+                                                scorePct >= 75
+                                                  ? 'bg-emerald-500'
+                                                  : scorePct >= 50
+                                                  ? 'bg-amber-500'
+                                                  : 'bg-rose-500'
+                                              }`}
+                                              style={{ width: `${scorePct}%` }}
+                                            />
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+
+                        </div>
+                      )}
+                    </div>
                   )}
-                </button>
-              </form>
+                </div>
+              )}
+
             </div>
           </div>
         )}
