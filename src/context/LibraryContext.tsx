@@ -11,6 +11,7 @@ export interface Chapter {
   description: string;
   pdf_url: string;
   total_pages: number;
+  target_class?: string;
 }
 
 interface LibraryContextType {
@@ -44,7 +45,30 @@ export const LibraryProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       const { data, error } = await query;
       if (error) throw error;
-      setChapters((data as Chapter[]) || []);
+
+      let fetchedChapters = (data as Chapter[]) || [];
+
+      // Filter by student's class (if user is a student)
+      if (currentUser?.role === 'student') {
+        const studentClass = (
+          (currentUser as any).class_name ||
+          (currentUser as any).class ||
+          (currentUser as any).grade ||
+          ''
+        )
+          .toString()
+          .trim()
+          .toLowerCase();
+
+        if (studentClass) {
+          fetchedChapters = fetchedChapters.filter((ch) => {
+            const chapterClass = (ch.target_class || 'All').trim().toLowerCase();
+            return chapterClass === 'all' || chapterClass === studentClass;
+          });
+        }
+      }
+
+      setChapters(fetchedChapters);
     } catch (err: any) {
       console.error('Error fetching chapters:', err.message);
     } finally {

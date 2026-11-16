@@ -23,7 +23,8 @@ import {
   Lock,
   Eye,
   FileText,
-  Loader2
+  Loader2,
+  Receipt
 } from 'lucide-react';
 
 type ActiveModal = 'profile' | 'attendance' | 'assignment' | 'fees' | 'results' | 'library' | null;
@@ -34,6 +35,7 @@ interface MaterialItem {
   chapter_title: string;
   page_count: string;
   pdf_url: string;
+  target_class?: string;
   is_unlocked?: boolean;
 }
 
@@ -46,6 +48,15 @@ interface TestResultItem {
   grade: string;
   rank_in_batch?: number;
   test_date: string;
+}
+
+interface FeePaymentItem {
+  id: string;
+  student_id: string;
+  fee_month: string; // 'YYYY-MM'
+  amount: number;
+  status: string;
+  paid_date: string;
 }
 
 const getPerformanceBadge = (obtained: number, total: number) => {
@@ -85,7 +96,6 @@ const getPerformanceBadge = (obtained: number, total: number) => {
   return null;
 };
 
-// Computes micro-trend relative to chronologically preceding test in same subject
 const computeScoreTrend = (
   currentIndex: number,
   allResults: TestResultItem[]
@@ -116,12 +126,21 @@ export const StudentDashboard: React.FC = () => {
   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
   const [activeReadingChapter, setActiveReadingChapter] = useState<any | null>(null);
 
-  const enrolledSubjects: string[] = 
+  const enrolledSubjects: string[] =
     (currentUser as any)?.enrolled_subjects?.length > 0
       ? (currentUser as any).enrolled_subjects
       : (currentUser as any)?.enrolledSubjects?.length > 0
       ? (currentUser as any).enrolledSubjects
       : ['Mathematics'];
+
+  const studentClass = (
+    (currentUser as any)?.class_name ||
+    (currentUser as any)?.class ||
+    (currentUser as any)?.grade ||
+    ''
+  )
+    .toString()
+    .trim();
 
   const [selectedSubject, setSelectedSubject] = useState<string>(enrolledSubjects[0] || 'Mathematics');
   const [dbMaterials, setDbMaterials] = useState<MaterialItem[]>([]);
@@ -130,18 +149,52 @@ export const StudentDashboard: React.FC = () => {
   const [liveTestResults, setLiveTestResults] = useState<TestResultItem[]>([]);
   const [isLoadingResults, setIsLoadingResults] = useState<boolean>(false);
 
+  // Month-by-Month Fee Ledger State
+  const [feeHistory, setFeeHistory] = useState<FeePaymentItem[]>([]);
+  const [isLoadingFees, setIsLoadingFees] = useState<boolean>(true);
+  const currentMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+
   const studentName = currentUser?.name || 'Aarav Patel';
   const studentPhone = currentUser?.phone || '9900011101';
-  
-  const liveFeeStatus = (currentUser as any)?.fee_status || (currentUser as any)?.feeStatus || 'UNPAID';
-  const isPaid = liveFeeStatus === 'PAID';
+  const monthlyFeeAmount = Number((currentUser as any)?.monthly_fee) || 1500;
   const attendanceRate = (currentUser as any)?.attendance_rate ?? (currentUser as any)?.attendanceRate ?? 100;
+
+  // Dynamic Current Month Paid Status (synced with fee_payments ledger)
+  const fallbackFeeStatus = (currentUser as any)?.fee_status || (currentUser as any)?.feeStatus || 'UNPAID';
+  const isPaid = isLoadingFees
+    ? fallbackFeeStatus === 'PAID'
+    : feeHistory.some((f) => f.fee_month === currentMonthKey && f.status === 'PAID');
 
   useEffect(() => {
     if (enrolledSubjects.length > 0 && !enrolledSubjects.includes(selectedSubject)) {
       setSelectedSubject(enrolledSubjects[0]);
     }
   }, [enrolledSubjects]);
+
+  // Fetch Month-by-Month Fee Payment History
+  useEffect(() => {
+    const fetchMyFeeHistory = async () => {
+      if (!currentUser?.id) return;
+      setIsLoadingFees(true);
+      try {
+        const { data, error } = await supabase
+          .from('fee_payments')
+          .select('*')
+          .eq('student_id', currentUser.id)
+          .order('fee_month', { ascending: false });
+
+        if (!error && data) {
+          setFeeHistory(data as FeePaymentItem[]);
+        }
+      } catch (err: any) {
+        console.error('Error fetching student fee history:', err.message);
+      } finally {
+        setIsLoadingFees(false);
+      }
+    };
+
+    fetchMyFeeHistory();
+  }, [currentUser?.id]);
 
   useEffect(() => {
     const fetchSubjectMaterials = async () => {
@@ -159,7 +212,13 @@ export const StudentDashboard: React.FC = () => {
           console.warn('Note: syllabus_materials fetch error or table pending:', error.message);
           setDbMaterials([]);
         } else if (data) {
-          setDbMaterials(data);
+          const filtered = studentClass
+            ? data.filter((m: any) => {
+                const matClass = (m.target_class || 'All').trim().toLowerCase();
+                return matClass === 'all' || matClass === studentClass.toLowerCase();
+              })
+            : data;
+          setDbMaterials(filtered);
         }
       } catch (err: any) {
         console.error('Error fetching materials:', err.message);
@@ -169,7 +228,7 @@ export const StudentDashboard: React.FC = () => {
     };
 
     fetchSubjectMaterials();
-  }, [selectedSubject]);
+  }, [selectedSubject, studentClass]);
 
   useEffect(() => {
     const fetchStudentTestResults = async () => {
@@ -196,7 +255,12 @@ export const StudentDashboard: React.FC = () => {
     fetchStudentTestResults();
   }, [currentUser?.id]);
 
-  const contextChapters = chapters.filter((c: any) => c.subject === selectedSubject);
+  const contextChapters = chapters.filter((c: any) => {
+    if (c.subject !== selectedSubject) return false;
+    if (!studentClass) return true;
+    const chClass = (c.target_class || 'All').trim().toLowerCase();
+    return chClass === 'all' || chClass === studentClass.toLowerCase();
+  });
 
   const combinedChapters = [
     ...contextChapters.map((c: any) => ({
@@ -206,7 +270,8 @@ export const StudentDashboard: React.FC = () => {
       totalPages: c.total_pages ?? c.totalPages ?? '14 Pages',
       pdfUrl: c.pdf_url || c.pdfUrl,
       isUnlocked: c.isUnlocked ?? true,
-      subject: c.subject
+      subject: c.subject,
+      targetClass: c.target_class || 'All'
     })),
     ...dbMaterials.map((m, idx) => ({
       id: m.id,
@@ -215,7 +280,8 @@ export const StudentDashboard: React.FC = () => {
       totalPages: m.page_count || 'Study Notes',
       pdfUrl: m.pdf_url,
       isUnlocked: m.is_unlocked ?? true,
-      subject: m.subject
+      subject: m.subject,
+      targetClass: m.target_class || 'All'
     }))
   ];
 
@@ -250,7 +316,7 @@ export const StudentDashboard: React.FC = () => {
     {
       id: 'fees',
       title: 'Fees Details',
-      subtitle: isPaid ? 'All Dues Cleared' : 'Payment Overdue',
+      subtitle: isPaid ? 'Current Month Paid' : 'Payment Overdue',
       icon: DollarSign,
       iconBg: 'bg-teal-100 text-teal-600',
       cardBg: 'bg-teal-50/60 border-teal-100',
@@ -277,13 +343,15 @@ export const StudentDashboard: React.FC = () => {
     {
       id: 'profile',
       title: 'Profile',
-      subtitle: 'Enrolled Subjects',
+      subtitle: studentClass ? `${studentClass} Class • Subjects` : 'Enrolled Subjects',
       icon: UserIcon,
       iconBg: 'bg-indigo-100 text-indigo-600',
       cardBg: 'bg-indigo-50/60 border-indigo-100',
       action: () => setActiveModal('profile'),
     },
   ];
+
+  const currentMonthDisplay = new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' });
 
   return (
     <div className="min-h-screen bg-slate-50 flex justify-center pb-20 select-none">
@@ -293,7 +361,14 @@ export const StudentDashboard: React.FC = () => {
         <div className="bg-gradient-to-r from-blue-700 via-indigo-600 to-violet-600 px-6 pt-7 pb-10 rounded-b-[2.5rem] shadow-md text-white">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <p className="text-xs uppercase tracking-widest text-blue-200 font-semibold">Student Portal</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs uppercase tracking-widest text-blue-200 font-semibold">Student Portal</p>
+                {studentClass && (
+                  <span className="text-[10px] bg-white/20 border border-white/25 px-2 py-0.5 rounded font-bold text-white">
+                    {studentClass} Class
+                  </span>
+                )}
+              </div>
               <h1 className="text-2xl font-bold flex items-center gap-1.5 mt-0.5">
                 Hello, {studentName.split(' ')[0]} <span>👋</span>
               </h1>
@@ -325,7 +400,9 @@ export const StudentDashboard: React.FC = () => {
 
           <div className="p-3 bg-white/10 backdrop-blur rounded-2xl border border-white/15 text-xs flex justify-between items-center">
             <div>
-              <span className="text-blue-200 text-[10px] font-bold uppercase">Enrolled Subject(s)</span>
+              <span className="text-blue-200 text-[10px] font-bold uppercase">
+                {studentClass ? `${studentClass} • Enrolled Subject(s)` : 'Enrolled Subject(s)'}
+              </span>
               <p className="font-semibold text-white">{enrolledSubjects.join(' • ')}</p>
             </div>
             <span className={`text-[10px] px-2.5 py-1 rounded font-bold ${
@@ -399,13 +476,20 @@ export const StudentDashboard: React.FC = () => {
           <div className="absolute inset-0 bg-black/50 z-30 flex flex-col justify-end backdrop-blur-sm">
             <div className="bg-white rounded-t-3xl max-h-[85vh] overflow-y-auto p-5 pb-8 shadow-2xl">
               <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-                <h3 className="font-bold text-lg text-slate-800 capitalize">
-                  {activeModal === 'library' && 'Syllabus & E-Reader Library'}
-                  {activeModal === 'fees' && 'Fees Status & History'}
-                  {activeModal === 'profile' && 'Student Profile'}
-                  {activeModal === 'attendance' && 'Daily Attendance Calendar'}
-                  {activeModal === 'assignment' && 'Assigned Homework'}
-                  {activeModal === 'results' && 'Academic Performance & Rankings'}
+                <h3 className="font-bold text-lg text-slate-800 capitalize flex items-center gap-2">
+                  <span>
+                    {activeModal === 'library' && 'Syllabus & E-Library'}
+                    {activeModal === 'fees' && 'Fees Status & History'}
+                    {activeModal === 'profile' && 'Student Profile'}
+                    {activeModal === 'attendance' && 'Daily Attendance Calendar'}
+                    {activeModal === 'assignment' && 'Assigned Homework'}
+                    {activeModal === 'results' && 'Academic Performance & Rankings'}
+                  </span>
+                  {activeModal === 'library' && studentClass && (
+                    <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold">
+                      {studentClass}
+                    </span>
+                  )}
                 </h3>
                 <button
                   onClick={() => setActiveModal(null)}
@@ -415,7 +499,7 @@ export const StudentDashboard: React.FC = () => {
                 </button>
               </div>
 
-              {/* 1. E-LIBRARY */}
+              {/* 1. E-LIBRARY (FILTERED BY STUDENT CLASS) */}
               {activeModal === 'library' && (
                 <div className="space-y-4 text-xs">
                   <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
@@ -441,7 +525,7 @@ export const StudentDashboard: React.FC = () => {
                       </div>
                     ) : combinedChapters.length === 0 ? (
                       <p className="text-center text-slate-400 py-6 text-xs">
-                        No chapters or notes published for {selectedSubject} yet.
+                        No chapters or notes published for {studentClass ? `${studentClass} ` : ''}{selectedSubject} yet.
                       </p>
                     ) : (
                       combinedChapters.map((chap: any) => {
@@ -502,13 +586,26 @@ export const StudentDashboard: React.FC = () => {
                       {studentName.charAt(0)}
                     </div>
                     <div>
-                      <p className="font-bold text-slate-800">{studentName}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-slate-800">{studentName}</p>
+                        {studentClass && (
+                          <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-bold">
+                            {studentClass} Class
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-500">Phone: {studentPhone}</p>
                     </div>
                   </div>
-                  <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1">
-                    <p className="font-bold text-slate-700">Enrolled Subjects:</p>
-                    <p className="text-blue-600 font-semibold">{enrolledSubjects.join(', ')}</p>
+                  <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1.5">
+                    <div className="flex justify-between">
+                      <span className="font-bold text-slate-700">Enrolled Subjects:</span>
+                      <span className="text-blue-600 font-semibold">{enrolledSubjects.join(', ')}</span>
+                    </div>
+                    <div className="flex justify-between pt-1 border-t border-slate-200/70">
+                      <span className="font-bold text-slate-700">Monthly Tuition Fee:</span>
+                      <span className="text-purple-700 font-bold">₹{monthlyFeeAmount.toLocaleString('en-IN')}/mo</span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -531,48 +628,105 @@ export const StudentDashboard: React.FC = () => {
               {/* 4. ASSIGNMENT */}
               {activeModal === 'assignment' && (
                 <div className="space-y-3">
-                  {assignments.map((item) => (
-                    <div key={item.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] font-bold text-blue-600 uppercase">{item.subject}</span>
-                        <p className="text-xs font-bold text-slate-800">{item.title}</p>
-                        <p className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
-                          <Clock className="w-3 h-3" /> Due: {item.dueDate}
-                        </p>
+                  {assignments
+                    .filter((item) => enrolledSubjects.includes(item.subject))
+                    .map((item) => (
+                      <div key={item.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold text-blue-600 uppercase">{item.subject}</span>
+                          <p className="text-xs font-bold text-slate-800">{item.title}</p>
+                          <p className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
+                            <Clock className="w-3 h-3" /> Due: {item.dueDate}
+                          </p>
+                        </div>
+                        <span className={`text-[10px] px-2 py-1 rounded-full font-bold ${
+                          item.status === 'Submitted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {item.status}
+                        </span>
                       </div>
-                      <span className={`text-[10px] px-2 py-1 rounded-full font-bold ${
-                        item.status === 'Submitted' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                      }`}>
-                        {item.status}
-                      </span>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               )}
 
-              {/* 5. FEES */}
+              {/* 5. FEES STATUS & MONTH-BY-MONTH RECEIPT HISTORY */}
               {activeModal === 'fees' && (
                 <div className="space-y-4">
                   <div className={`p-4 rounded-2xl border flex items-center justify-between ${
                     isPaid ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'
                   }`}>
                     <div>
-                      <p className="text-xs font-semibold text-slate-500">Status</p>
+                      <p className="text-xs font-semibold text-slate-500">{currentMonthDisplay} Status</p>
                       <p className={`text-xl font-bold mt-0.5 ${isPaid ? 'text-emerald-700' : 'text-rose-600'}`}>
-                        {isPaid ? 'PAID (Term 1)' : 'UNPAID (Pending Due)'}
+                        {isPaid ? 'PAID ✓' : 'UNPAID (Pending Due)'}
                       </p>
                     </div>
                     {isPaid ? <CheckCircle2 className="w-8 h-8 text-emerald-500" /> : <AlertCircle className="w-8 h-8 text-rose-500" />}
                   </div>
+
                   {!isPaid && (
                     <button className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition">
-                      Pay ₹12,000 via UPI
+                      Pay ₹{monthlyFeeAmount.toLocaleString('en-IN')} via UPI
                     </button>
                   )}
+
+                  {/* Month-by-Month Payment Receipt History */}
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                        <Receipt className="w-3.5 h-3.5 text-emerald-600" /> Payment Receipt History
+                      </p>
+                      <span className="text-[10px] font-semibold text-slate-400">
+                        {feeHistory.length} Receipt(s)
+                      </span>
+                    </div>
+
+                    {isLoadingFees ? (
+                      <div className="flex justify-center py-6 text-slate-400">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      </div>
+                    ) : feeHistory.length === 0 ? (
+                      <p className="text-center text-slate-400 text-[11px] py-4 bg-slate-50 rounded-xl border border-slate-100">
+                        No fee receipts recorded yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                        {feeHistory.map((item) => {
+                          const [y, m] = item.fee_month.split('-').map(Number);
+                          const monthLabel =
+                            y && m
+                              ? new Date(y, m - 1, 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' })
+                              : item.fee_month;
+
+                          return (
+                            <div
+                              key={item.id}
+                              className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs"
+                            >
+                              <div>
+                                <p className="font-bold text-slate-800">{monthLabel}</p>
+                                <p className="text-[10px] text-slate-400">
+                                  Paid on{' '}
+                                  {new Date(item.paid_date).toLocaleDateString('en-IN', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric',
+                                  })}
+                                </p>
+                              </div>
+                              <span className="font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-lg text-[10px]">
+                                ₹{Number(item.amount).toLocaleString('en-IN')} PAID
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
-              {/* 6. RESULTS & PODIUM PERFORMANCE BADGES WITH DYNAMIC SCORES & TREND */}
+              {/* 6. RESULTS */}
               {activeModal === 'results' && (
                 <div className="space-y-3 text-xs">
                   {isLoadingResults ? (
@@ -598,7 +752,6 @@ export const StudentDashboard: React.FC = () => {
                               : 'bg-slate-50 border-slate-100 hover:border-slate-200'
                           }`}
                         >
-                          {/* Top row: Test Name, Subject, Trend Pill, and Podium Badge */}
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="font-bold text-slate-800 text-xs">
@@ -608,7 +761,6 @@ export const StudentDashboard: React.FC = () => {
                                 {res.subject}
                               </span>
 
-                              {/* Micro-Trend Indicator */}
                               {trend.type === 'up' && (
                                 <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 flex items-center gap-0.5">
                                   ▲ {trend.label}
@@ -631,7 +783,6 @@ export const StudentDashboard: React.FC = () => {
                               )}
                             </div>
 
-                            {/* Podium Badge */}
                             {badge && (
                               <span
                                 className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${badge.badgeStyle}`}
@@ -642,7 +793,6 @@ export const StudentDashboard: React.FC = () => {
                             )}
                           </div>
 
-                          {/* Middle row: Progress Track */}
                           <div className="w-full bg-slate-200/80 h-1.5 rounded-full overflow-hidden my-2">
                             <div
                               className={`h-full rounded-full transition-all duration-500 ${
@@ -660,7 +810,6 @@ export const StudentDashboard: React.FC = () => {
                             />
                           </div>
 
-                          {/* Bottom row: Date & Batch Rank on left, Exact Number Score on right */}
                           <div className="flex items-end justify-between mt-1 pt-1.5 border-t border-slate-100/80">
                             <div>
                               <span className="text-[10px] text-slate-400 font-medium block">

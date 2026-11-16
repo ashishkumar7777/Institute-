@@ -23,8 +23,9 @@ export const AttendanceCalendar: React.FC = () => {
 
     const fetchAttendance = async () => {
       setLoading(true);
-      const firstDay = new Date(year, month, 1).toISOString().split('T')[0];
-      const lastDay = new Date(year, month + 1, 0).toISOString().split('T')[0];
+      const totalDays = new Date(year, month + 1, 0).getDate();
+      const firstDay = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+      const lastDay = `${year}-${String(month + 1).padStart(2, '0')}-${String(totalDays).padStart(2, '0')}`;
 
       const { data, error } = await supabase
         .from('attendance_records')
