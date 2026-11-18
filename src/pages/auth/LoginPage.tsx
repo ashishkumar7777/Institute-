@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../services/supabase';
 import { currentInstitute } from '../../services/mockData';
 import { Phone, Lock, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
 
@@ -24,12 +25,32 @@ export const LoginPage: React.FC = () => {
     setErrorMsg('');
 
     const res = await loginWithPhoneAndPin(phone, pin);
-    setIsSubmitting(false);
 
     if (res.error) {
+      setIsSubmitting(false);
       setErrorMsg(res.error);
     } else {
-      navigate('/');
+      // Clean phone number to query profile table
+      const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+      
+      // Fetch exact role directly from Supabase profiles table
+      const { data: profileData, error: profileErr } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('phone', cleanPhone)
+        .maybeSingle();
+
+      setIsSubmitting(false);
+
+      const role = profileData?.role || res.user?.role;
+
+      if (role === 'owner') {
+        navigate('/owner', { replace: true });
+      } else if (role === 'teacher') {
+        navigate('/teacher', { replace: true });
+      } else {
+        navigate('/student', { replace: true });
+      }
     }
   };
 
@@ -89,34 +110,6 @@ export const LoginPage: React.FC = () => {
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>
-
-        {/* <div className="mt-6 pt-5 border-t border-slate-800 text-center">
-          <p className="text-[11px] text-slate-500 mb-2">Development Direct Switch:</p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => navigate('/owner')}
-              className="flex-1 py-1.5 bg-purple-950/60 border border-purple-800/40 rounded-lg text-[10px] text-purple-300 font-bold"
-            >
-              Owner
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/teacher')}
-              className="flex-1 py-1.5 bg-emerald-950/60 border border-emerald-800/40 rounded-lg text-[10px] text-emerald-300 font-bold"
-            >
-              Teacher
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate('/student')}
-              className="flex-1 py-1.5 bg-blue-950/60 border border-blue-800/40 rounded-lg text-[10px] text-blue-300 font-bold"
-            >
-              Student
-            </button>
-          </div>
-        </div> */}
-
 
       </div>
     </div>

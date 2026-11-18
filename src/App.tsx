@@ -7,6 +7,8 @@ import { LoginPage } from './pages/auth/LoginPage';
 import { StudentDashboard } from './pages/student/StudentDashboard';
 import { TeacherDashboard } from './pages/teacher/TeacherDashboard';
 import { OwnerDashboard } from './pages/owner/OwnerDashboard';
+import { StudentProfilePage } from './pages/owner/StudentProfilePage';
+import { LandingPage } from './pages/landingPage/LandingPage'; // Correct import path
 import { ProtectedRoute } from './components/common/ProtectedRoute';
 
 const RoleBasedRedirect: React.FC = () => {
@@ -36,8 +38,11 @@ export default function App() {
         <LibraryProvider>
           <NoticeProvider>
             <Routes>
-              {/* Root redirect handles automatic routing based on active session */}
-              <Route path="/" element={<RoleBasedRedirect />} />
+              {/* Main Landing Page at Root */}
+              <Route path="/" element={<LandingPage />} />
+
+              {/* Automatic Role Redirect (Optional route if needed) */}
+              <Route path="/dashboard" element={<RoleBasedRedirect />} />
 
               {/* Public route */}
               <Route path="/login" element={<LoginPage />} />
@@ -48,6 +53,16 @@ export default function App() {
                 element={
                   <ProtectedRoute allowedRoles={['owner']}>
                     <OwnerDashboard />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Dedicated Full-Screen Student Profile Dossier for Owner */}
+              <Route
+                path="/owner/student/:studentId"
+                element={
+                  <ProtectedRoute allowedRoles={['owner']}>
+                    <StudentProfilePage />
                   </ProtectedRoute>
                 }
               />
