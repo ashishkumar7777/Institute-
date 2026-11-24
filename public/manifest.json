@@ -1,5 +1,5 @@
 {
-  "short_name": "Scholar's Academy",
+  "short_name": "Scholar's AKademy",
   "name": "Scholar's Academy Portal",
   "icons": [
     {
@@ -13,7 +13,8 @@
       "sizes": "512x512"
     }
   ],
-  "start_url": "/",
+  "start_url": "/login",
+  "scope": "/",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
   "display": "standalone"
