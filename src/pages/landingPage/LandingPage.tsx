@@ -14,7 +14,7 @@ import {
   Star
 } from 'lucide-react';
 
-import logoImg from '../../assets/Logo.png';
+import logoImg from '../../assets/logo.png';
 
 export const LandingPage: React.FC = () => {
   const navigate = useNavigate();
