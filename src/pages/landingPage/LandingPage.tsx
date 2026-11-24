@@ -14,6 +14,8 @@ import {
   Star
 } from 'lucide-react';
 
+import logoImg from '../../assets/Logo.png';
+
 export const LandingPage: React.FC = () => {
   const navigate = useNavigate();
 
@@ -25,10 +27,16 @@ export const LandingPage: React.FC = () => {
         <div className="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl bg-purple-800 text-white flex items-center justify-center font-bold shadow-md shadow-purple-500/20">
-              <Building2 className="w-6 h-6" />
+              <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200 flex items-center justify-center p-1 shadow-sm overflow-hidden shrink-0">
+  <img
+    src={logoImg}
+    alt="Scholar's AKademy Logo"
+    className="w-full h-full object-contain"
+  />
+</div>
             </div>
             <div>
-              <span className="font-black text-lg tracking-tight block text-slate-900">Scholar's Academy</span>
+              <span className="font-black text-lg tracking-tight block text-slate-900">Scholar's AKademy</span>
               <span className="text-[11px] text-purple-700 font-bold uppercase tracking-wider block -mt-1">Excellence in Education</span>
             </div>
           </div>
@@ -52,7 +60,7 @@ export const LandingPage: React.FC = () => {
           </span>
           
           <h1 className="text-4xl md:text-6xl font-black tracking-tight leading-tight">
-            Welcome to <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-300 via-pink-300 to-amber-300">Scholar's Academy</span>
+            Welcome to <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-300 via-pink-300 to-amber-300">Scholar's AKademy</span>
           </h1>
           
           <p className="text-sm md:text-base text-purple-100/80 max-w-2xl mx-auto font-medium leading-relaxed">
@@ -188,7 +196,7 @@ export const LandingPage: React.FC = () => {
       {/* Institute & Teachers Highlights */}
       <section className="py-12 px-6 max-w-6xl mx-auto w-full">
         <div className="text-center max-w-2xl mx-auto mb-14 space-y-2">
-          <h2 className="text-xs font-bold uppercase tracking-widest text-purple-700">Why Scholar's Academy?</h2>
+          <h2 className="text-xs font-bold uppercase tracking-widest text-purple-700">Why Scholar's AKademy?</h2>
           <h3 className="text-2xl md:text-3xl font-extrabold text-slate-900">Building Strong Foundations for Future Success</h3>
         </div>
 
@@ -242,10 +250,16 @@ export const LandingPage: React.FC = () => {
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 border-b border-slate-800 pb-6">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-purple-800 flex items-center justify-center font-bold text-white">
-              <Building2 className="w-4 h-4" />
+              <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200 flex items-center justify-center p-1 shadow-sm overflow-hidden shrink-0">
+                <img
+                  src={logoImg}
+                  alt="Scholar's AKademy Logo"
+                  className="w-full h-full object-contain"
+                />
+              </div>
             </div>
             <div>
-              <span className="font-bold text-sm block">Scholar's Academy</span>
+              <span className="font-bold text-sm block">Scholar's AKademy</span>
               <span className="text-[10px] text-slate-400">Dadri, Uttar Pradesh</span>
             </div>
           </div>
@@ -258,7 +272,7 @@ export const LandingPage: React.FC = () => {
         </div>
 
         <div className="max-w-6xl mx-auto pt-6 text-center text-xs text-slate-500">
-          © {new Date().getFullYear()} Scholar's Academy. All rights reserved.
+          © {new Date().getFullYear()} Scholar's AKademy. All rights reserved.
         </div>
       </footer>
 

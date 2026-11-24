@@ -1236,7 +1236,7 @@ export const OwnerDashboard: React.FC = () => {
                       type="text"
                       value={instituteName}
                       onChange={(e) => setInstituteName(e.target.value)}
-                      placeholder="e.g. Scholar's Academy"
+                      placeholder="e.g. Scholar's AKademy"
                       className="w-full p-2.5 rounded-xl border border-slate-200 font-bold text-slate-800 focus:outline-none focus:border-indigo-500"
                       required
                     />

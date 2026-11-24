@@ -85,7 +85,7 @@ export const TeacherDashboard: React.FC = () => {
   const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(true);
   const [isSavingAttendance, setIsSavingAttendance] = useState<boolean>(false);
   const [nudgingStudentId, setNudgingStudentId] = useState<string | null>(null);
-  const [instituteName, setInstituteName] = useState<string>("Scholar's Academy");
+  const [instituteName, setInstituteName] = useState<string>("Scholar's AKademy");
 
   const currentMonthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
   const currentMonthLabel = new Date().toLocaleString('en-IN', { month: 'short', year: 'numeric' });

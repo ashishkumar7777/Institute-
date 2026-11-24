@@ -31,7 +31,7 @@ export interface Chapter {
 
 export const currentInstitute: Institute = {
   id: 'inst_apex_01',
-  name: "Scholar's Academy",
+  name: "Scholar's AKademy",
   primaryColor: '#2563eb', // blue-600
   logo: 'https://placehold.co/180x60?text=Apex+Academy',
 };
