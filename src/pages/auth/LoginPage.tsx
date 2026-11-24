@@ -4,8 +4,8 @@ import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../services/supabase';
 import { currentInstitute } from '../../services/mockData';
 
-
-import { Phone, Lock, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
+import logoImg from '../../assets/logo.png';
+import { Phone, Lock, ArrowRight, AlertCircle } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
   const { loginWithPhoneAndPin } = useAuth();
@@ -60,8 +60,12 @@ export const LoginPage: React.FC = () => {
     <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
       <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-6 text-white shadow-2xl">
         <div className="text-center mb-6">
-          <div className="w-16 h-16 bg-blue-600 rounded-2xl mx-auto flex items-center justify-center mb-3 shadow-lg shadow-blue-500/30">
-            <ShieldCheck className="w-8 h-8 text-white" />
+          <div className="w-20 h-20 bg-white rounded-2xl mx-auto flex items-center justify-center mb-3 p-1.5 shadow-lg overflow-hidden">
+            <img
+              src={logoImg}
+              alt="Scholar's AKademy Logo"
+              className="w-full h-full object-contain"
+            />
           </div>
           <h1 className="text-xl font-bold">{currentInstitute.name}</h1>
           <p className="text-xs text-slate-400 mt-1">Student & Faculty Mobile Portal</p>
